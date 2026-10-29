@@ -96,3 +96,68 @@ through `KEYSTONE_DOWNLOAD_DIR`. Build caches contain absolute paths and must
 be regenerated after a source/tool/output relocation. Keep simulation results
 under the containing project's `experiment/keystone`, separate from sources
 and generated builds.
+
+## LOC application helpers
+
+`include/loc_pim.h` and `app/loc_pim.c` provide a small RV64 application
+library for LOC-enabled gem5 full-system runs. They use gem5's canonical
+`m5ops.h` and RISC-V instruction stubs. The monitor supplies the active
+enclave lifetime identity; applications provide only opaque object/request
+handles. No LOC syscall, Eyrie modification or SDK submodule patch is needed.
+
+From the parent gem5 checkout, build with:
+
+```bash
+bash configs/keystone/build_eyrie_app.sh
+```
+
+This installs `loc_pim.h`, the matching gem5 headers and
+`lib/libkeystone-loc.a` under `build/keystone/eyrie-app/sdk/`. Add that
+directory's `include` to an application's include path and link the library
+alongside the normal Keystone application library. The build also extracts
+Eyrie `44dda3a36f81a20eb8557ba02888c73bc3b0766f` from the prepared local
+mirror, applies only the existing toolchain compatibility patch, and builds
+the standard `freemem` runtime. Override `KEYSTONE_EYRIE_SOURCE_DIR` to use
+another local repository containing that commit. Source stays under
+`ext/keystone`; generated artifacts go under the parent `build/` directory.
+
+The main interfaces are:
+
+| Interface | Meaning |
+| --- | --- |
+| `loc_pim_principal` | Query the monitor-bound active lifetime; cannot set it. |
+| `loc_pim_alloc/grant/free` | Own private device objects and set exact self permissions. |
+| `loc_pim_check_buffer` | Validate the full private host range for a direction; moves no data. |
+| `loc_pim_stream_*` | Admit, observe/commit, poll, reap or cancel a protected transfer. |
+| `loc_pim_submit[_scalar]` | Submit a capability-checked analytical command. |
+| `loc_pim_poll/wait` | Poll without consumption, or consume a completed command; both return pending without blocking the hart. |
+| `loc_pim_complete` | Application-side polling loop that consumes the final result. |
+| `loc_pim_upload` | Protected admission, real CPU reads, modeled device transfer, reap. |
+| `loc_pim_download_placeholder` | Modeled device transfer, real CPU zero stores, commit, reap. |
+
+Use `LOC_PIM_INPUT_PERMISSIONS` for READ + EXECUTE + COPY_TO and
+`LOC_PIM_OUTPUT_PERMISSIONS` for WRITE + EXECUTE + COPY_FROM. Grants replace
+permissions. A successful buffer check is not a reusable authorization;
+stream admission checks again and retains private EPM/object ownership.
+The check establishes page accessibility and region ownership, not exact
+`malloc` bounds. Keep the admitted virtual mapping stable until completion.
+
+`examples/vector-add/eapp.c` is an ordinary U-mode application using these
+interfaces. It allocates its arrays in private enclave memory, uploads both
+inputs, submits ADD, consumes the result, downloads and frees the objects.
+Its output is zero analytical placeholder data: the test checks host input
+integrity and output stores, rather than numerical vector sums. The library
+preserves PIMeval's analytical mode; neither uploads nor downloads implement
+functional payload movement.
+
+The example's launcher adds lifecycle and negative tests around that flow:
+two concurrent enclave lifetimes, private inputs spanning pages, rejected
+buffers, foreign/stale handles, signed scalar submission, duplicate-byte
+coverage, real Eyrie timer interruption/resume, and two busy destruction
+attempts. The test-only Linux driver records EIDs, verifies EPM scrubbing,
+and arms a real one-shot timer immediately before A resumes. The normal
+monitor interrupt path stops A; the SDK resumes it. The application, SDK,
+Eyrie and monitor follow their ordinary interfaces. The fixture enables synthetic 100 us
+minimum device latencies to force pending commands; it is not a performance
+measurement. See the parent's `configs/keystone/README.md` for run commands
+and evidence verification.
