@@ -1,0 +1,97 @@
+diff --git a/examples/tests/CMakeLists.txt b/examples/tests/CMakeLists.txt
+index 837013f..6ab17b5 100644
+--- a/examples/tests/CMakeLists.txt
++++ b/examples/tests/CMakeLists.txt
+@@ -93,6 +93,9 @@ file(REMOVE_RECURSE ${CMAKE_CURRENT_BINARY_DIR}/tmp)
+ # linker flags for all tests
+ set_target_properties(${all_test_bins}
+   PROPERTIES LINK_FLAGS "-nostdlib -static -T ${CMAKE_CURRENT_SOURCE_DIR}/app.lds")
++foreach(test IN LISTS all_test_bins)
++  target_compile_options(${test} PRIVATE -fno-stack-protector)
++endforeach()
+ ###############################################
+ 
+ # host
+diff --git a/examples/tests/untrusted/untrusted.c b/examples/tests/untrusted/untrusted.c
+index 4b8abd2..f3aee6a 100644
+--- a/examples/tests/untrusted/untrusted.c
++++ b/examples/tests/untrusted/untrusted.c
+@@ -27,7 +27,7 @@ void EAPP_ENTRY eapp_entry(){
+   copy_from_shared(host_str, pkgstr.offset, pkgstr.size);
+ 
+   int i;
+-  int ct;
++  int ct = 0;
+   for(i = 0; i < pkgstr.size; i++){
+     if( ((char*)host_str)[i] == 'l' ){
+       ct++;
+diff --git a/macros.cmake b/macros.cmake
+index 34a53cd..b14977e 100644
+--- a/macros.cmake
++++ b/macros.cmake
+@@ -53,7 +53,7 @@ macro(check_compiler target)
+   message(STATUS "Check for working C compiler: ${target}")
+   execute_process(
+     COMMAND ${target} -print-file-name=crt.o
+-    OUTPUT_FILE OUTPUT
++    OUTPUT_VARIABLE COMPILER_CRT
+     RESULT_VARIABLE ERROR)
+ 
+   if ("${ERROR}" STREQUAL 0)
+@@ -85,12 +85,29 @@ macro(add_eyrie_runtime target_name tag plugins) # the files are passed via ${AR
+   set(runtime_prefix runtime)
+   set (eyrie_src ${CMAKE_CURRENT_BINARY_DIR}/${runtime_prefix}/src/eyrie-${target_name})
+ 
++  set(eyrie_repository "https://github.com/keystone-enclave/keystone-runtime.git")
++  set(eyrie_revision "${tag}")
++  if(KEYSTONE_EYRIE_REPOSITORY)
++    set(eyrie_repository "${KEYSTONE_EYRIE_REPOSITORY}")
++  endif()
++  if(KEYSTONE_EYRIE_REVISION)
++    set(eyrie_revision "${KEYSTONE_EYRIE_REVISION}")
++  endif()
++  set(eyrie_patch_command "")
++  if(KEYSTONE_EYRIE_PATCH)
++    if(NOT KEYSTONE_PATCH_HELPER)
++      message(FATAL_ERROR "KEYSTONE_EYRIE_PATCH requires KEYSTONE_PATCH_HELPER")
++    endif()
++    set(eyrie_patch_command python3 "${KEYSTONE_PATCH_HELPER}" "${KEYSTONE_EYRIE_PATCH}")
++  endif()
++
+   ExternalProject_Add(eyrie-${target_name}
+     PREFIX ${runtime_prefix}
+-    GIT_REPOSITORY https://github.com/keystone-enclave/keystone-runtime
+-    GIT_TAG ${tag}
++    GIT_REPOSITORY ${eyrie_repository}
++    GIT_TAG ${eyrie_revision}
++    PATCH_COMMAND ${eyrie_patch_command}
+     CONFIGURE_COMMAND ""
+-    UPDATE_COMMAND git fetch
++    UPDATE_DISCONNECTED TRUE
+     BUILD_COMMAND ./build.sh ${plugins}
+     BUILD_IN_SOURCE TRUE
+     INSTALL_COMMAND "")
+diff --git a/src/app/CMakeLists.txt b/src/app/CMakeLists.txt
+index bdc15fd..32a336a 100644
+--- a/src/app/CMakeLists.txt
++++ b/src/app/CMakeLists.txt
+@@ -18,6 +18,7 @@ set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${LDFLAGS}")
+ include_directories(${INCLUDE_DIRS})
+ 
+ add_library(${PROJECT_NAME} ${SOURCE_FILES})
++target_compile_options(${PROJECT_NAME} PRIVATE -fno-stack-protector)
+ 
+ install(TARGETS ${PROJECT_NAME} DESTINATION ${out_dir}/lib)
+ install(DIRECTORY ${INCLUDE_DIRS} DESTINATION ${out_dir}/include)
+diff --git a/src/edge/CMakeLists.txt b/src/edge/CMakeLists.txt
+index d14797e..ec23ac6 100644
+--- a/src/edge/CMakeLists.txt
++++ b/src/edge/CMakeLists.txt
+@@ -19,6 +19,7 @@ include_directories(${INCLUDE_DIRS})
+ add_definitions(${DEFINES})
+ 
+ add_library(${PROJECT_NAME} ${SOURCE_FILES})
++target_compile_options(${PROJECT_NAME} PRIVATE -fno-stack-protector)
+ 
+ install(TARGETS ${PROJECT_NAME} DESTINATION ${out_dir}/lib)
+ install(DIRECTORY ${INCLUDE_DIRS} DESTINATION ${out_dir}/include)

@@ -3,16 +3,33 @@ project(keystone C)
 include(ProcessorCount)
 set(CMAKE_VERBOSE_MAKEFILE ON)
 
+# Portable defaults for the pinned LOC/gem5 integration. All compatibility
+# patches live in this fork, independently of the simulator checkout path.
+set(KEYSTONE_PATCH_HELPER "${CMAKE_SOURCE_DIR}/integration/loc/apply_patch_once.py"
+    CACHE FILEPATH "Idempotent dependency patch helper")
+set(KEYSTONE_EYRIE_PATCH "${CMAKE_SOURCE_DIR}/integration/loc/eyrie-bootlin.patch"
+    CACHE FILEPATH "Eyrie toolchain compatibility patch")
+set(KEYSTONE_EYRIE_REVISION "44dda3a36f81a20eb8557ba02888c73bc3b0766f"
+    CACHE STRING "Tested Eyrie revision")
+set(KEYSTONE_EYRIE_REPOSITORY "https://github.com/keystone-enclave/keystone-runtime.git"
+    CACHE STRING "Eyrie source repository or local mirror")
+set(KEYSTONE_DOWNLOAD_DIR "${CMAKE_BINARY_DIR}/downloads"
+    CACHE PATH "Buildroot download cache")
+
 ###############################################################################
 ## MACROS
 ###############################################################################
 
 # add patch macro
 macro(add_patch submodule patch working_directory patch_list)
+  if(NOT EXISTS "${KEYSTONE_PATCH_HELPER}")
+    message(FATAL_ERROR "Set KEYSTONE_PATCH_HELPER to the integration patch helper")
+  endif()
   add_custom_command(OUTPUT ${patch}.applied
     WORKING_DIRECTORY ${working_directory}
-    COMMAND patch --forward -p0 < ${patchdir}/${submodule}/${patch} || true
+    COMMAND python3 "${KEYSTONE_PATCH_HELPER}" --strip 0 "${patchdir}/${submodule}/${patch}"
     COMMAND touch ${CMAKE_BINARY_DIR}/${patch}.applied
+    DEPENDS "${patchdir}/${submodule}/${patch}" "${KEYSTONE_PATCH_HELPER}"
     COMMENT "Applying ${patch}")
   list(APPEND ${patch_list} ${patch}.applied)
 endmacro()
@@ -132,7 +149,7 @@ add_custom_command(OUTPUT ${overlay_root} COMMAND mkdir -p ${overlay_root})
 add_custom_command(OUTPUT ${overlay_dir} COMMAND mkdir -p ${overlay_dir})
 add_custom_command(OUTPUT ${buildroot_wrkdir} COMMAND mkdir -p ${buildroot_wrkdir})
 add_custom_target("buildroot" ALL DEPENDS ${buildroot_srcdir} ${buildroot_wrkdir}/.config ${overlay_root} ${buildroot_wrkdir}
-  COMMAND $(MAKE) -s -C ${buildroot_srcdir} RISCV=$ENV{RISCV} PATH=$ENV{PATH} O=${buildroot_wrkdir}
+  COMMAND $(MAKE) -s -C ${buildroot_srcdir} RISCV=$ENV{RISCV} PATH=$ENV{PATH} BR2_DL_DIR=${KEYSTONE_DOWNLOAD_DIR} O=${buildroot_wrkdir}
   COMMENT "Building buildroot"
 )
 
@@ -141,7 +158,7 @@ add_custom_command(DEPENDS ${buildroot_config} OUTPUT ${buildroot_wrkdir}/.confi
   COMMAND mkdir -p ${buildroot_wrkdir}
   COMMAND cp ${buildroot_config} ${buildroot_wrkdir}/.config
   COMMAND sed \"s/^BR2_ROOTFS_OVERLAY=.*/BR2_ROOTFS_OVERLAY=\\\"${overlay_dir_stripped}\\\"/g\" -i ${buildroot_wrkdir}/.config
-  COMMAND $(MAKE) -s -C ${buildroot_srcdir} RISCV=$ENV{RISCV} PATH=$ENV{PATH}
+  COMMAND $(MAKE) -s -C ${buildroot_srcdir} RISCV=$ENV{RISCV} PATH=$ENV{PATH} BR2_DL_DIR=${KEYSTONE_DOWNLOAD_DIR}
     O=${buildroot_wrkdir} CROSS_COMPILE=${cross_compile} olddefconfig
   COMMENT "Configuring buildroot (overlay = ${overlay_dir})"
 )
@@ -153,7 +170,7 @@ add_custom_command(DEPENDS ${buildroot_config} OUTPUT ${buildroot_wrkdir}/.confi
 
 add_custom_command(OUTPUT ${bootrom_wrkdir} COMMAND mkdir -p ${bootrom_wrkdir})
 add_custom_target("bootrom-sync" DEPENDS ${bootrom_srcdir} ${bootrom_wrkdir}
-  COMMAND rsync -r ${bootrom_srcdir}/ ${bootrom_wrkdir})
+  COMMAND rsync -r --exclude=.git ${bootrom_srcdir}/ ${bootrom_wrkdir})
 add_custom_target("bootrom" ALL DEPENDS ${bootrom_wrkdir} ${bootrom_srcdir} "bootrom-sync"
   COMMAND $(MAKE) -C ${bootrom_wrkdir} O=${bootrom_wrkdir} march=${ISA} mabi=${ABI} CC=riscv${BITS}-unknown-elf-gcc
     OBJCOPY=riscv${BITS}-unknown-elf-objcopy
@@ -218,7 +235,7 @@ add_custom_target("linux" ALL DEPENDS ${linux_image})
 
 add_custom_command(OUTPUT ${driver_wrkdir} COMMAND mkdir -p ${driver_wrkdir})
 add_custom_target("driver-sync" DEPENDS ${driver_srcdir} ${driver_wrkdir}
-	COMMAND rsync -r ${driver_srcdir}/ ${driver_wrkdir})
+	COMMAND rsync -r --exclude=.git ${driver_srcdir}/ ${driver_wrkdir})
 add_custom_target("driver" ALL DEPENDS ${driver_srcdir} ${linux_srcdir} "linux-symvers" "driver-sync"
   COMMAND $(MAKE) -C ${linux_wrkdir} O=${linux_wrkdir} CROSS_COMPILE=${cross_compile} ARCH=riscv
     M=${driver_wrkdir} modules
@@ -245,7 +262,7 @@ set(example_wrkdir examples)
 add_subdirectory(sdk/examples ${example_wrkdir})
 set_target_properties(examples PROPERTIES EXCLUDE_FROM_ALL YES)
 
-add_custom_target("tests" DEPENDS examples ${overlay_root}
+add_custom_target("tests" DEPENDS test-package ${overlay_root}
   COMMAND find ${example_wrkdir} -name "tests.ke" | xargs -I{} rsync {} ${overlay_root}
   COMMENT "Copying example enclave packages"
   )
