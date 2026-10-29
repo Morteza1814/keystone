@@ -1,6 +1,6 @@
 # Pinned Keystone integration for LOC/gem5
 
-The `loc-gem5-integration` branch is based on Keystone commit
+The `keystone-host-integration` branch is based on Keystone commit
 `a1842a1ec959c4e40ffd55091795bb577894c545`, the version used for the initial
 gem5 full-system validation. The `sm` submodule uses
 `https://github.com/Morteza1814/sm.git` at
