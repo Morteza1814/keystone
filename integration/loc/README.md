@@ -4,7 +4,7 @@ The `keystone-host-integration` branch is based on Keystone commit
 `a1842a1ec959c4e40ffd55091795bb577894c545`, the version used for the initial
 gem5 full-system validation. The `sm` submodule uses
 `https://github.com/Morteza1814/sm.git` at
-`b742a730b51f998ed46e327f50a3fee3354e3125`. The initial CPU-isolation baseline
+`0989261855cd768067f3b14bebc58a7cd002d8e8`. The initial CPU-isolation baseline
 used monitor commit `843d3509b8a514d43729d779a0cf6bdb1d0c94e0`. Retain these
 historical bases when reproducing earlier results; the forks' default branches
 may differ.
@@ -15,8 +15,17 @@ identity platform, selected with `KEYSTONE_LOC=1` when building its generic
 OpenSBI platform. The containing gem5 workspace's
 `configs/keystone/build_identity.sh` builds this variant separately and its
 `configs/keystone/README.md` documents the validated Atomic and Timing tests.
-The default generic monitor remains available. Protected host/PIM transfers
-are a subsequent integration stage.
+The default generic monitor remains available. The LOC platform also supplies
+a destruction preflight: gem5 can refuse teardown while an analytical
+CPU/cache transfer retains the private EPM. The monitor returns
+`SBI_ERR_SM_ENCLAVE_NOT_DESTROYABLE` before changing the enclave state,
+scrubbing memory or removing PMP protection, so the host can resume the
+enclave and finish/cancel the stream before retrying. The generic monitor uses
+a weak default preflight which permits normal destruction.
+
+The containing workspace's `configs/keystone/build_transfers.sh` builds the
+busy-aware monitor and a separate transfer guest. These CPU/cache streams keep
+PIMeval analytical; they do not add numerical PIM payloads or DMA support.
 
 ## Prepare sources
 
