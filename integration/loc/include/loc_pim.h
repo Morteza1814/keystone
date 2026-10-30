@@ -63,6 +63,12 @@ uint64_t loc_pim_poll(loc_pim_request request);
 uint64_t loc_pim_wait(loc_pim_request request);
 uint64_t loc_pim_complete(loc_pim_request request);
 
+/* Raw CPU loops for calibration: no LOC admission or PIM transfer. The caller
+ * supplies accessible memory. Aligned 64-bit accesses are unrolled across
+ * 64-byte blocks; byte accesses handle unaligned heads and short tails. */
+void loc_pim_cpu_read(const void *source, size_t bytes);
+void loc_pim_cpu_zero(void *destination, size_t bytes);
+
 /* Synchronous convenience helpers for the analytical model. They spin while
  * pending and execute real scalar CPU accesses through the cache hierarchy.
  * UPLOAD observes private host bytes but does not deliver functional payloads.

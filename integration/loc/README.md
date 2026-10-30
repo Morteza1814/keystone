@@ -134,6 +134,7 @@ The main interfaces are:
 | `loc_pim_complete` | Application-side polling loop that consumes the final result. |
 | `loc_pim_upload` | Protected admission, real CPU reads, modeled device transfer, reap. |
 | `loc_pim_download_placeholder` | Modeled device transfer, real CPU zero stores, commit, reap. |
+| `loc_pim_cpu_read/zero` | Raw host access loops for calibration; no LOC admission or PIM operation. |
 
 Use `LOC_PIM_INPUT_PERMISSIONS` for READ + EXECUTE + COPY_TO and
 `LOC_PIM_OUTPUT_PERMISSIONS` for WRITE + EXECUTE + COPY_FROM. Grants replace
@@ -141,6 +142,14 @@ permissions. A successful buffer check is not a reusable authorization;
 stream admission checks again and retains private EPM/object ownership.
 The check establishes page accessibility and region ownership, not exact
 `malloc` bounds. Keep the admitted virtual mapping stable until completion.
+
+CPU accesses use aligned 64-bit words, with eight words unrolled per 64-byte
+block. Byte accesses handle an unaligned head and a tail shorter than one
+word. Every access stays within the admitted range; every byte must still be
+observed before COMMIT. The GNU `may_alias` word type supports buffers such
+as INT32 arrays without violating strict aliasing. The raw read/zero routines
+are shared out-of-line by the protected helpers and measurement baseline.
+They perform ordinary CPU accesses and provide no LOC authorization themselves.
 
 `examples/vector-add/eapp.c` is an ordinary U-mode application using these
 interfaces. It allocates its arrays in private enclave memory, uploads both
@@ -166,9 +175,15 @@ and evidence verification.
 workload. It uses the same application library and ordinary Eyrie, with two
 uploads, one INT32 ADD and one placeholder download. The parent builds the
 normal driver without the regression's instrumentation or forced timer.
-Twelve `m5_work_begin/end` regions bracket creation, entry, initialization,
+Sixteen `m5_work_begin/end` regions bracket creation, entry, initialization,
 object allocation/grants, each upload, ADD submission/completion, download,
-host checks, object free, exit and destruction. Entry and exit regions span
+host checks, object free, exit and destruction, plus three CPU-only baselines
+and buffer preparation. The baseline uses the same CPU routines inside the
+enclave without active LOC streams. Initialization and ordered A/B/C cache
+warming are repeated before both measurement groups. These are warm-cache
+diagnostics, not an isolated measure of Keystone overhead. Application totals
+include the diagnostics; the protected offload interval excludes them.
+Entry and exit regions span
 the host/application boundary. The default is 16,384 elements; the parent
 build accepts `KEYSTONE_VECTOR_ELEMENTS` and `KEYSTONE_VECTOR_BUILD_DIR`.
 Use the parent's `configs/keystone/build_vector_timing.sh` and

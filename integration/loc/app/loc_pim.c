@@ -1,5 +1,74 @@
 #include "loc_pim.h"
 
+/* Buffers need not have uint64_t effective type (e.g., INT32 arrays). */
+typedef uint64_t loc_pim_word __attribute__((__may_alias__));
+
+/* Keep the same routines out of line for protected and baseline callers.
+ * Volatile preserves every access; only bytes inside the range are touched. */
+__attribute__((noinline)) void
+loc_pim_cpu_read(const void *source, size_t bytes)
+{
+    const volatile unsigned char *data = source;
+    while (bytes && ((uintptr_t)data & (sizeof(loc_pim_word) - 1))) {
+        (void)*data++;
+        --bytes;
+    }
+    while (bytes >= 64) {
+        const volatile loc_pim_word *words = (const void *)data;
+        (void)words[0];
+        (void)words[1];
+        (void)words[2];
+        (void)words[3];
+        (void)words[4];
+        (void)words[5];
+        (void)words[6];
+        (void)words[7];
+        data += 64;
+        bytes -= 64;
+    }
+    while (bytes >= sizeof(loc_pim_word)) {
+        (void)*(const volatile loc_pim_word *)data;
+        data += sizeof(loc_pim_word);
+        bytes -= sizeof(loc_pim_word);
+    }
+    while (bytes) {
+        (void)*data++;
+        --bytes;
+    }
+}
+
+__attribute__((noinline)) void
+loc_pim_cpu_zero(void *destination, size_t bytes)
+{
+    volatile unsigned char *data = destination;
+    while (bytes && ((uintptr_t)data & (sizeof(loc_pim_word) - 1))) {
+        *data++ = 0;
+        --bytes;
+    }
+    while (bytes >= 64) {
+        volatile loc_pim_word *words = (void *)data;
+        words[0] = 0;
+        words[1] = 0;
+        words[2] = 0;
+        words[3] = 0;
+        words[4] = 0;
+        words[5] = 0;
+        words[6] = 0;
+        words[7] = 0;
+        data += 64;
+        bytes -= 64;
+    }
+    while (bytes >= sizeof(loc_pim_word)) {
+        *(volatile loc_pim_word *)data = 0;
+        data += sizeof(loc_pim_word);
+        bytes -= sizeof(loc_pim_word);
+    }
+    while (bytes) {
+        *data++ = 0;
+        --bytes;
+    }
+}
+
 uint64_t
 loc_pim_principal(void)
 {
@@ -133,9 +202,7 @@ loc_pim_upload(loc_pim_object object, const void *source, size_t bytes)
         bytes, LOC_PIM_TO_DEVICE);
     if (!request)
         return M5_PIM_STATUS_COPY_FAILED;
-    const volatile unsigned char *data = source;
-    for (size_t i = 0; i < bytes; ++i)
-        (void)data[i];
+    loc_pim_cpu_read(source, bytes);
     return stream_finish(request);
 }
 
@@ -152,8 +219,6 @@ loc_pim_download_placeholder(void *destination,
         loc_pim_stream_reap(request);
         return status;
     }
-    volatile unsigned char *data = destination;
-    for (size_t i = 0; i < bytes; ++i)
-        data[i] = 0;
+    loc_pim_cpu_zero(destination, bytes);
     return stream_finish(request);
 }

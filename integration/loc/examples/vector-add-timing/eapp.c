@@ -17,18 +17,54 @@ require(int condition, unsigned long error)
         EAPP_RETURN(error);
 }
 
+static void
+prepare_buffers(void)
+{
+    for (unsigned long i = 0; i < LOC_VECTOR_ELEMENTS; ++i) {
+        input_a[i] = i;
+        input_b[i] = 3 * i;
+        output[i] = 0xdeadbeef;
+    }
+    /* Repeat this exact preparation before both measurement groups. All
+     * three arrays are warmed in order; no active LOC stream exists. */
+    loc_pim_cpu_read((const void *)input_a, LOC_VECTOR_BYTES);
+    loc_pim_cpu_read((const void *)input_b, LOC_VECTOR_BYTES);
+    loc_pim_cpu_read((const void *)output, LOC_VECTOR_BYTES);
+}
+
+static void
+check_buffers(void)
+{
+    for (unsigned long i = 0; i < LOC_VECTOR_ELEMENTS; ++i) {
+        /* Analytical mode checks host integrity and placeholder stores.
+         * No numerical vector-add result is claimed. */
+        require(input_a[i] == (uint32_t)i &&
+            input_b[i] == (uint32_t)(3 * i) && output[i] == 0, 0xf107);
+    }
+}
+
 void EAPP_ENTRY
 eapp_entry(void)
 {
     phase_end(LOC_VECTOR_ENTER);
     phase_begin(LOC_VECTOR_INITIALIZE);
     require(loc_pim_principal() != 0, 0xf101);
-    for (unsigned long i = 0; i < LOC_VECTOR_ELEMENTS; ++i) {
-        input_a[i] = i;
-        input_b[i] = 3 * i;
-        output[i] = 0xdeadbeef;
-    }
+    prepare_buffers();
     phase_end(LOC_VECTOR_INITIALIZE);
+
+    phase_begin(LOC_VECTOR_BASELINE_A);
+    loc_pim_cpu_read((const void *)input_a, LOC_VECTOR_BYTES);
+    phase_end(LOC_VECTOR_BASELINE_A);
+    phase_begin(LOC_VECTOR_BASELINE_B);
+    loc_pim_cpu_read((const void *)input_b, LOC_VECTOR_BYTES);
+    phase_end(LOC_VECTOR_BASELINE_B);
+    phase_begin(LOC_VECTOR_BASELINE_C);
+    loc_pim_cpu_zero((void *)output, LOC_VECTOR_BYTES);
+    phase_end(LOC_VECTOR_BASELINE_C);
+    phase_begin(LOC_VECTOR_PREPARE_LOC);
+    check_buffers();
+    prepare_buffers();
+    phase_end(LOC_VECTOR_PREPARE_LOC);
 
     phase_begin(LOC_VECTOR_ALLOCATE);
     const loc_pim_object a = loc_pim_alloc(LOC_VECTOR_BYTES);
@@ -61,12 +97,7 @@ eapp_entry(void)
     phase_end(LOC_VECTOR_DOWNLOAD);
 
     phase_begin(LOC_VECTOR_CHECK);
-    for (unsigned long i = 0; i < LOC_VECTOR_ELEMENTS; ++i) {
-        /* Analytical mode checks host integrity and placeholder stores.
-         * No numerical vector-add result is claimed. */
-        require(input_a[i] == (uint32_t)i &&
-            input_b[i] == (uint32_t)(3 * i) && output[i] == 0, 0xf107);
-    }
+    check_buffers();
     phase_end(LOC_VECTOR_CHECK);
     phase_begin(LOC_VECTOR_FREE);
     require(!loc_pim_free(a) && !loc_pim_free(b) && !loc_pim_free(c),
