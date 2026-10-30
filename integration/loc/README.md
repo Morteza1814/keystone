@@ -161,3 +161,17 @@ Eyrie and monitor follow their ordinary interfaces. The fixture enables syntheti
 minimum device latencies to force pending commands; it is not a performance
 measurement. See the parent's `configs/keystone/README.md` for run commands
 and evidence verification.
+
+`examples/vector-add-timing/` provides a separate single-enclave measurement
+workload. It uses the same application library and ordinary Eyrie, with two
+uploads, one INT32 ADD and one placeholder download. The parent builds the
+normal driver without the regression's instrumentation or forced timer.
+Twelve `m5_work_begin/end` regions bracket creation, entry, initialization,
+object allocation/grants, each upload, ADD submission/completion, download,
+host checks, object free, exit and destruction. Entry and exit regions span
+the host/application boundary. The default is 16,384 elements; the parent
+build accepts `KEYSTONE_VECTOR_ELEMENTS` and `KEYSTONE_VECTOR_BUILD_DIR`.
+Use the parent's `configs/keystone/build_vector_timing.sh` and
+`tests/gem5/keystone/run_vector_timing.py`. Measurement uses a Timing CPU and
+zero synthetic minimum latencies. Payload values remain analytical; zero
+output checks do not validate numerical ADD results.
