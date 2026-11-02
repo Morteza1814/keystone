@@ -1,4 +1,4 @@
-/* Keystone application interface to gem5's analytical LOC model. */
+/* Keystone application interface to gem5's LOC model. */
 #ifndef KEYSTONE_LOC_PIM_H
 #define KEYSTONE_LOC_PIM_H
 
@@ -29,6 +29,8 @@ enum loc_pim_direction
 
 /* Identity is supplied by the monitor. Zero means no active enclave. */
 uint64_t loc_pim_principal(void);
+/* Trusted selection: CPU=0, analytical bulk=1, functional DMA=2. */
+uint64_t loc_pim_transfer_model(void);
 loc_pim_object loc_pim_alloc(size_t bytes);
 uint64_t loc_pim_grant(loc_pim_object object, uint64_t permissions);
 uint64_t loc_pim_free(loc_pim_object object);
@@ -43,7 +45,9 @@ uint64_t loc_pim_check_buffer(loc_pim_object object, const void *buffer,
  * A TO_HOST stream starts pending: await HOST_READY, store every byte, COMMIT.
  * REAP consumes a completed stream. CANCEL releases a host-phase stream;
  * device work must drain before cancellation. Only the owner can use a handle.
- * These calls never block a hart or wake one on device completion. */
+ * In bulk/DMA mode BEGIN schedules device work, and STATUS/REAP suffice;
+ * no host CPU coverage or COMMIT is used. These calls never block a hart
+ * or wake one on device completion. */
 loc_pim_request loc_pim_stream_begin(loc_pim_object object, const void *buffer,
     size_t bytes, enum loc_pim_direction direction);
 uint64_t loc_pim_stream_status(loc_pim_request request);
@@ -69,12 +73,15 @@ uint64_t loc_pim_complete(loc_pim_request request);
 void loc_pim_cpu_read(const void *source, size_t bytes);
 void loc_pim_cpu_zero(void *destination, size_t bytes);
 
-/* Synchronous convenience helpers for the analytical model. They spin while
- * pending and execute real scalar CPU accesses through the cache hierarchy.
- * UPLOAD observes private host bytes but does not deliver functional payloads.
- * DOWNLOAD_PLACEHOLDER writes zeroes, never computed PIM results. Failed BEGIN
- * returns COPY_FAILED without dereferencing the rejected host buffer. */
+/* Synchronous helpers spin until completion. Failed BEGIN returns COPY_FAILED
+ * without dereferencing the rejected host buffer. In CPU mode UPLOAD reads
+ * host bytes and DOWNLOAD_PLACEHOLDER writes zeroes, with analytical PIM
+ * payloads. Bulk mode waits for analytical copies without accessing bytes.
+ * DMA mode makes UPLOAD functional. DOWNLOAD is the matching functional API
+ * and rejects other modes; DOWNLOAD_PLACEHOLDER rejects DMA mode. */
 uint64_t loc_pim_upload(loc_pim_object object, const void *source,
+    size_t bytes);
+uint64_t loc_pim_download(void *destination, loc_pim_object object,
     size_t bytes);
 uint64_t loc_pim_download_placeholder(void *destination,
     loc_pim_object object, size_t bytes);

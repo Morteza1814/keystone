@@ -33,13 +33,14 @@ prepare_buffers(void)
 }
 
 static void
-check_buffers(void)
+check_buffers(uint32_t expected_output)
 {
     for (unsigned long i = 0; i < LOC_VECTOR_ELEMENTS; ++i) {
-        /* Analytical mode checks host integrity and placeholder stores.
+        /* Check host integrity and CPU placeholders or bulk sentinels.
          * No numerical vector-add result is claimed. */
         require(input_a[i] == (uint32_t)i &&
-            input_b[i] == (uint32_t)(3 * i) && output[i] == 0, 0xf107);
+            input_b[i] == (uint32_t)(3 * i) && output[i] == expected_output,
+            0xf107);
     }
 }
 
@@ -49,6 +50,8 @@ eapp_entry(void)
     phase_end(LOC_VECTOR_ENTER);
     phase_begin(LOC_VECTOR_INITIALIZE);
     require(loc_pim_principal() != 0, 0xf101);
+    const uint64_t transfer_model = loc_pim_transfer_model();
+    require(transfer_model <= M5_PIM_TRANSFER_MODEL_BULK, 0xf109);
     prepare_buffers();
     phase_end(LOC_VECTOR_INITIALIZE);
 
@@ -62,7 +65,7 @@ eapp_entry(void)
     loc_pim_cpu_zero((void *)output, LOC_VECTOR_BYTES);
     phase_end(LOC_VECTOR_BASELINE_C);
     phase_begin(LOC_VECTOR_PREPARE_LOC);
-    check_buffers();
+    check_buffers(0);
     prepare_buffers();
     phase_end(LOC_VECTOR_PREPARE_LOC);
 
@@ -97,7 +100,7 @@ eapp_entry(void)
     phase_end(LOC_VECTOR_DOWNLOAD);
 
     phase_begin(LOC_VECTOR_CHECK);
-    check_buffers();
+    check_buffers(transfer_model == M5_PIM_TRANSFER_MODEL_BULK ? 0xdeadbeef : 0);
     phase_end(LOC_VECTOR_CHECK);
     phase_begin(LOC_VECTOR_FREE);
     require(!loc_pim_free(a) && !loc_pim_free(b) && !loc_pim_free(c),

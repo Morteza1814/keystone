@@ -75,6 +75,12 @@ loc_pim_principal(void)
     return m5_pim_enclave(M5_PIM_ENCLAVE_QUERY, 0, 0, 0);
 }
 
+uint64_t
+loc_pim_transfer_model(void)
+{
+    return m5_pim_transfer(M5_PIM_TRANSFER_MODEL, 0, 0, 0, 0);
+}
+
 loc_pim_object
 loc_pim_alloc(size_t bytes)
 {
@@ -195,13 +201,30 @@ stream_finish(loc_pim_request request)
     return status ? status : reaped;
 }
 
+static uint64_t
+device_finish(loc_pim_request request)
+{
+    const uint64_t status = stream_ready(request);
+    if (status == M5_PIM_TRANSFER_HOST_READY) {
+        loc_pim_stream_cancel(request);
+        return M5_PIM_STATUS_COPY_FAILED;
+    }
+    const uint64_t reaped = loc_pim_stream_reap(request);
+    return status ? status : reaped;
+}
+
 uint64_t
 loc_pim_upload(loc_pim_object object, const void *source, size_t bytes)
 {
+    const uint64_t model = loc_pim_transfer_model();
+    if (model > M5_PIM_TRANSFER_MODEL_DMA)
+        return M5_PIM_STATUS_COPY_FAILED;
     const loc_pim_request request = loc_pim_stream_begin(object, source,
         bytes, LOC_PIM_TO_DEVICE);
     if (!request)
         return M5_PIM_STATUS_COPY_FAILED;
+    if (model != M5_PIM_TRANSFER_MODEL_CPU)
+        return device_finish(request);
     loc_pim_cpu_read(source, bytes);
     return stream_finish(request);
 }
@@ -210,10 +233,15 @@ uint64_t
 loc_pim_download_placeholder(void *destination,
     loc_pim_object object, size_t bytes)
 {
+    const uint64_t model = loc_pim_transfer_model();
+    if (model > M5_PIM_TRANSFER_MODEL_BULK)
+        return M5_PIM_STATUS_COPY_FAILED;
     const loc_pim_request request = loc_pim_stream_begin(object, destination,
         bytes, LOC_PIM_TO_HOST);
     if (!request)
         return M5_PIM_STATUS_COPY_FAILED;
+    if (model == M5_PIM_TRANSFER_MODEL_BULK)
+        return device_finish(request);
     const uint64_t status = stream_ready(request);
     if (status != M5_PIM_TRANSFER_HOST_READY) {
         loc_pim_stream_reap(request);
@@ -221,4 +249,17 @@ loc_pim_download_placeholder(void *destination,
     }
     loc_pim_cpu_zero(destination, bytes);
     return stream_finish(request);
+}
+
+uint64_t
+loc_pim_download(void *destination, loc_pim_object object, size_t bytes)
+{
+    /* A functional API must never silently return analytical placeholders. */
+    if (loc_pim_transfer_model() != M5_PIM_TRANSFER_MODEL_DMA)
+        return M5_PIM_STATUS_COPY_FAILED;
+    const loc_pim_request request = loc_pim_stream_begin(object, destination,
+        bytes, LOC_PIM_TO_HOST);
+    if (!request)
+        return M5_PIM_STATUS_COPY_FAILED;
+    return device_finish(request);
 }
