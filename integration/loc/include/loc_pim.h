@@ -46,8 +46,9 @@ uint64_t loc_pim_check_buffer(loc_pim_object object, const void *buffer,
  * REAP consumes a completed stream. CANCEL releases a host-phase stream;
  * device work must drain before cancellation. Only the owner can use a handle.
  * In bulk/DMA mode BEGIN schedules device work, and STATUS/REAP suffice;
- * no host CPU coverage or COMMIT is used. These calls never block a hart
- * or wake one on device completion. */
+ * no host CPU coverage or COMMIT is used. DMA BEGIN holds the requesting
+ * CPU while timed admission captures authorized physical spans; device work
+ * then runs asynchronously. Device completion does not wake a hart. */
 loc_pim_request loc_pim_stream_begin(loc_pim_object object, const void *buffer,
     size_t bytes, enum loc_pim_direction direction);
 uint64_t loc_pim_stream_status(loc_pim_request request);
