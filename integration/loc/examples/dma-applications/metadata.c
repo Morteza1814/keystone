@@ -7,15 +7,29 @@ main(void)
 {
 #if LOC_DMA_APP_KIND == 6
     printf("{\"gemm_dimension\":%lu,", (unsigned long)LOC_DMA_APP_GEMM_DIM);
-#elif LOC_DMA_APP_KIND == 7
-    printf("{\"gemv_rows\":%lu,\"gemv_columns\":%lu,"
-        "\"input_layout\":\"row_major\","
-        "\"host_packing\":\"blocked_16x16_row_to_column\","
-        "\"packing_timing_scope\":\"host_prepare_inside_application\",",
-        (unsigned long)LOC_DMA_APP_ELEMENTS,
-        (unsigned long)LOC_DMA_APP_GEMV_COLUMNS);
+#elif LOC_DMA_APP_KIND == 7 || LOC_DMA_APP_KIND == 8
+    printf("{\"gemv_rows\":%lu,\"gemv_columns\":%lu,",
+        (unsigned long)LOC_DMA_APP_ELEMENTS, (unsigned long)LOC_DMA_APP_GEMV_COLUMNS);
+#if LOC_DMA_APP_LORA_PLACED
+    printf("\"input_layout\":\"column_major\",\"host_packing\":\"none_preformatted_weights\","
+        "\"packing_timing_scope\":\"not_required_for_declared_input_layout\",");
+#else
+    printf("\"input_layout\":\"row_major\",\"host_packing\":\"blocked_16x16_row_to_column\","
+        "\"packing_timing_scope\":\"host_prepare_inside_application\",");
+#endif
 #else
     printf("{");
+#endif
+#if LOC_DMA_APP_KIND == 8
+    if (LOC_DMA_APP_LORA_RESIDENT)
+        printf("\"lora_weight_layout\":\"%s\",", LOC_DMA_APP_LORA_PLACED ?
+            "pimeval_placed_matrix_v2" : "matrix_object_v1");
+    printf("\"lora_rank\":%lu,\"lora_scale\":1,\"lora_resident\":%d,"
+        "\"fixture_scope\":\"synthetic_layer_level_inference_operator\","
+        "\"ax_bound\":%llu,\"bax_bound\":%llu,\"y_bound\":%llu,",
+        (unsigned long)LOC_DMA_APP_LORA_RANK, LOC_DMA_APP_LORA_RESIDENT,
+        LOC_DMA_APP_LORA_AX_BOUND, LOC_DMA_APP_LORA_BAX_BOUND,
+        LOC_DMA_APP_LORA_Y_BOUND);
 #endif
     printf("\"application\":\"%s\",\"backend\":\"%s\","
         "\"phase_profile\":\"%s\",\"compute_timing\":\"%s\","
@@ -41,12 +55,20 @@ main(void)
         (unsigned long)LOC_DMA_APP_DOWNLOAD_BYTES);
 #if LOC_DMA_APP_BACKEND == 3
 #if LOC_DMA_APP_KIND != 3
+#if LOC_DMA_APP_KIND == 8
+    printf("\"host_lora\":%lu,", (unsigned long)LOC_DMA_APP_ROUNDS);
+#endif
     printf("\"host_prepare\":1,");
 #endif
     printf("\"host_compute\":%lu},\"operation_counts\":{",
         (unsigned long)LOC_DMA_APP_COMPUTE_PHASES);
 #else
-    printf("\"host_prepare\":1,\"upload_inputs\":%lu,\"pim_compute\":%lu,"
+#if LOC_DMA_APP_KIND == 8
+    printf("\"host_lora\":%lu,", (unsigned long)LOC_DMA_APP_ROUNDS);
+#endif
+    if (LOC_DMA_APP_PREPARE_PHASES)
+        printf("\"host_prepare\":%lu,", (unsigned long)LOC_DMA_APP_PREPARE_PHASES);
+    printf("\"upload_inputs\":%lu,\"pim_compute\":%lu,"
         "\"download_results\":%lu,\"host_finish\":%lu},"
         "\"operation_counts\":{",
         (unsigned long)LOC_DMA_APP_UPLOADS,

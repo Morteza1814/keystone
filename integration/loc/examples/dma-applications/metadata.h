@@ -12,7 +12,7 @@
 #define LOC_DMA_APP_ELEMENTS 128UL
 #endif
 #ifndef LOC_DMA_APP_ROUNDS
-#if LOC_DMA_APP_KIND == 7
+#if (LOC_DMA_APP_KIND == 7 || LOC_DMA_APP_KIND == 8)
 #define LOC_DMA_APP_ROUNDS 1UL
 #else
 #define LOC_DMA_APP_ROUNDS 3UL
@@ -21,11 +21,11 @@
 #if LOC_DMA_APP_BACKEND < 1 || LOC_DMA_APP_BACKEND > 3
 #error "LOC_DMA_APP_BACKEND must be 1=secure, 2=unsecured or 3=cpu"
 #endif
-#if LOC_DMA_APP_KIND < 1 || LOC_DMA_APP_KIND > 7
-#error "LOC_DMA_APP_KIND must be 1=knn, 2=filter, 3=pool, 4=kmeans, 5=downsampling, 6=gemm or 7=gemv"
+#if LOC_DMA_APP_KIND < 1 || LOC_DMA_APP_KIND > 8
+#error "LOC_DMA_APP_KIND must be 1=knn, 2=filter, 3=pool, 4=kmeans, 5=downsampling, 6=gemm, 7=gemv or 8=lora"
 #endif
 #if LOC_DMA_APP_KIND >= 5 && LOC_DMA_APP_BACKEND == 3
-#error "Downsampling, GEMM and GEMV currently support secure and unsecured PIM backends only"
+#error "Downsampling, GEMM, GEMV and LoRA currently support secure and unsecured PIM backends only"
 #endif
 #if LOC_DMA_APP_ELEMENTS < 8 || LOC_DMA_APP_ELEMENTS > 1048576
 #error "LOC_DMA_APP_ELEMENTS must be between 8 and 1048576"
@@ -42,15 +42,61 @@
 #error "GEMM requires 3<=dimension<=256 and elements=dimension*dimension"
 #endif
 #endif
-#if LOC_DMA_APP_KIND == 7
+#ifndef LOC_DMA_APP_LORA_RESIDENT
+#define LOC_DMA_APP_LORA_RESIDENT 0
+#endif
+#ifndef LOC_DMA_APP_LORA_PLACED
+#define LOC_DMA_APP_LORA_PLACED 0
+#endif
+#if LOC_DMA_APP_LORA_PLACED && (!LOC_DMA_APP_LORA_RESIDENT || LOC_DMA_APP_BACKEND == 3)
+#error "Placed weights require resident LoRA on a PIM backend"
+#endif
+#ifndef LOC_DMA_APP_LORA_RANK
+#define LOC_DMA_APP_LORA_RANK 8UL
+#endif
+#define LOC_DMA_APP_PACK_COLUMNS 16UL
+#if LOC_DMA_APP_LORA_PLACED
+#define LOC_DMA_APP_PREPARE_PHASES 0UL
+#elif LOC_DMA_APP_LORA_RESIDENT
+#define LOC_DMA_APP_PREPARE_PHASES ((LOC_DMA_APP_GEMV_COLUMNS + 15UL) / 16UL)
+#else
+#define LOC_DMA_APP_PREPARE_PHASES 1UL
+#endif
+#if LOC_DMA_APP_LORA_RESIDENT < 0 || LOC_DMA_APP_LORA_RESIDENT > 1 || \
+    (LOC_DMA_APP_LORA_RESIDENT && LOC_DMA_APP_KIND != 8)
+#error "Resident mode is supported only for LoRA"
+#endif
+#if LOC_DMA_APP_LORA_RANK < 1 || LOC_DMA_APP_LORA_RANK > 64
+#error "LoRA rank must be 1..64"
+#endif
+#if (LOC_DMA_APP_KIND == 7 || LOC_DMA_APP_KIND == 8)
 #ifndef LOC_DMA_APP_GEMV_COLUMNS
 #error "GEMV requires LOC_DMA_APP_GEMV_COLUMNS"
 #endif
 #if LOC_DMA_APP_ELEMENTS > 65536 || LOC_DMA_APP_GEMV_COLUMNS < 1 || \
-    LOC_DMA_APP_GEMV_COLUMNS > 1024 || \
-    LOC_DMA_APP_ELEMENTS * LOC_DMA_APP_GEMV_COLUMNS > 1048576 || \
+    LOC_DMA_APP_GEMV_COLUMNS > (LOC_DMA_APP_LORA_RESIDENT ? 12288 : 1024) || \
+    LOC_DMA_APP_ELEMENTS * LOC_DMA_APP_GEMV_COLUMNS > \
+        (LOC_DMA_APP_LORA_RESIDENT ? 150994944ULL : 1048576ULL) || \
     LOC_DMA_APP_ROUNDS > 32
 #error "GEMV requires rows8..65536, columns1..1024, rows*columns<=1048576 and rounds1..32"
+#endif
+#endif
+
+#define LOC_DMA_APP_LORA_SCALE 1UL
+#if LOC_DMA_APP_KIND == 8 && (LOC_DMA_APP_ROUNDS > 2 || \
+    (!LOC_DMA_APP_LORA_RESIDENT && LOC_DMA_APP_ROUNDS != 1))
+#error "LoRA requires exactly one projection per run"
+#endif
+/* All fixture operands have magnitude <=8, bias <=8. Every partial sum
+ * is bounded by these triangle inequalities, including final combination. */
+#if LOC_DMA_APP_KIND == 8
+#define LOC_DMA_APP_LORA_AX_BOUND (64ULL * LOC_DMA_APP_GEMV_COLUMNS)
+#define LOC_DMA_APP_LORA_BAX_BOUND \
+    (8ULL * LOC_DMA_APP_LORA_RANK * LOC_DMA_APP_LORA_AX_BOUND)
+#define LOC_DMA_APP_LORA_Y_BOUND \
+    (64ULL * LOC_DMA_APP_GEMV_COLUMNS + LOC_DMA_APP_LORA_BAX_BOUND + 8ULL)
+#if LOC_DMA_APP_LORA_Y_BOUND > 2147483647ULL
+#error "LoRA fixture can overflow INT32"
 #endif
 #endif
 
@@ -66,6 +112,14 @@
 #define LOC_DMA_APP_PRIVATE_BYTES \
     (((4UL * (5UL + LOC_DMA_APP_ROUNDS) * LOC_DMA_APP_ELEMENTS + \
         4UL * LOC_DMA_APP_GEMM_DIM + 65536UL) + 4095UL) / 4096UL * 4096UL)
+#elif LOC_DMA_APP_KIND == 8
+#define LOC_DMA_APP_PRIVATE_BYTES \
+    (((4UL * ((LOC_DMA_APP_LORA_RESIDENT ? \
+        LOC_DMA_APP_ELEMENTS * (LOC_DMA_APP_GEMV_COLUMNS + (LOC_DMA_APP_LORA_PLACED ? 0 : LOC_DMA_APP_PACK_COLUMNS)) : \
+        2UL * LOC_DMA_APP_ELEMENTS * LOC_DMA_APP_GEMV_COLUMNS) + \
+        (LOC_DMA_APP_LORA_RANK + LOC_DMA_APP_ROUNDS) * LOC_DMA_APP_GEMV_COLUMNS + \
+        (LOC_DMA_APP_LORA_RANK + 3UL + 2UL * LOC_DMA_APP_ROUNDS) * LOC_DMA_APP_ELEMENTS + \
+        LOC_DMA_APP_ROUNDS * LOC_DMA_APP_LORA_RANK) + 65536UL) + 4095UL) / 4096UL * 4096UL)
 #elif LOC_DMA_APP_KIND == 7
 #define LOC_DMA_APP_PRIVATE_BYTES \
     (((4UL * (2UL * LOC_DMA_APP_ELEMENTS * LOC_DMA_APP_GEMV_COLUMNS + \
@@ -157,14 +211,28 @@
 #define LOC_DMA_APP_COMPUTE_PHASES LOC_DMA_APP_COMMANDS
 #define LOC_DMA_APP_HOST_FINISH_PHASES LOC_DMA_APP_ROUNDS
 #else
+#if LOC_DMA_APP_KIND == 8
+#define LOC_DMA_APP_NAME "lora"
+#if LOC_DMA_APP_LORA_RESIDENT || LOC_DMA_APP_LORA_RANK != 8
+#define LOC_DMA_APP_ARITHMETIC "bounded_int32_lora_scale1_column_axpy"
+#else
+#define LOC_DMA_APP_ARITHMETIC "bounded_int32_lora_rank8_scale1_column_axpy"
+#endif
+#else
 #define LOC_DMA_APP_NAME "gemv"
 #define LOC_DMA_APP_ARITHMETIC "bounded_int32_gemv_alpha1_beta0_column_axpy"
+#endif
 #define LOC_DMA_APP_OBJECTS 2UL
+#define LOC_DMA_APP_MODEL_UPLOADS \
+    ((LOC_DMA_APP_GEMV_COLUMNS + LOC_DMA_APP_PACK_COLUMNS - 1UL) / LOC_DMA_APP_PACK_COLUMNS)
 #define LOC_DMA_APP_UPLOADS \
-    (LOC_DMA_APP_ROUNDS * (LOC_DMA_APP_GEMV_COLUMNS + 1UL))
+    (LOC_DMA_APP_LORA_RESIDENT ? LOC_DMA_APP_MODEL_UPLOADS + LOC_DMA_APP_ROUNDS : \
+        LOC_DMA_APP_ROUNDS * (LOC_DMA_APP_GEMV_COLUMNS + 1UL))
 #define LOC_DMA_APP_DOWNLOADS LOC_DMA_APP_ROUNDS
 #define LOC_DMA_APP_COMMANDS (LOC_DMA_APP_ROUNDS * LOC_DMA_APP_GEMV_COLUMNS)
-#define LOC_DMA_APP_UPLOAD_BYTES (LOC_DMA_APP_UPLOADS * LOC_DMA_APP_VECTOR_BYTES)
+#define LOC_DMA_APP_UPLOAD_BYTES \
+    ((LOC_DMA_APP_LORA_RESIDENT ? LOC_DMA_APP_GEMV_COLUMNS + LOC_DMA_APP_ROUNDS : \
+      LOC_DMA_APP_UPLOADS) * LOC_DMA_APP_VECTOR_BYTES)
 #define LOC_DMA_APP_DOWNLOAD_BYTES (LOC_DMA_APP_ROUNDS * LOC_DMA_APP_VECTOR_BYTES)
 #define LOC_DMA_APP_COMPUTE_PHASES LOC_DMA_APP_COMMANDS
 #define LOC_DMA_APP_HOST_FINISH_PHASES LOC_DMA_APP_ROUNDS

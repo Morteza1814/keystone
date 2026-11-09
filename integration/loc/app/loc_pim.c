@@ -82,6 +82,12 @@ loc_pim_transfer_model(void)
 }
 
 loc_pim_object
+loc_pim_alloc_placed(size_t rows, size_t columns, loc_pim_object associated)
+{
+    return m5_pim_alloc_placed(rows, columns, associated);
+}
+
+loc_pim_object
 loc_pim_alloc(size_t bytes)
 {
     return m5_pim_obj_alloc(bytes);
@@ -211,6 +217,31 @@ device_finish(loc_pim_request request)
     }
     const uint64_t reaped = loc_pim_stream_reap(request);
     return status ? status : reaped;
+}
+
+uint64_t
+loc_pim_upload_at(loc_pim_object object, size_t offset,
+    const void *source, size_t bytes)
+{
+    const loc_pim_request request = m5_pim_transfer_at(object,
+        (uintptr_t)source, bytes, LOC_PIM_TO_DEVICE, offset);
+    return request ? device_finish(request) : M5_PIM_STATUS_COPY_FAILED;
+}
+
+uint64_t
+loc_pim_download_at(void *destination, loc_pim_object object,
+    size_t offset, size_t bytes)
+{
+    const loc_pim_request request = m5_pim_transfer_at(object,
+        (uintptr_t)destination, bytes, LOC_PIM_TO_HOST, offset);
+    return request ? device_finish(request) : M5_PIM_STATUS_COPY_FAILED;
+}
+
+loc_pim_request
+loc_pim_axpy_range(loc_pim_object source, loc_pim_object destination,
+    int64_t scalar, size_t offset, size_t bytes)
+{
+    return m5_pim_axpy_range(source, destination, scalar, offset, bytes);
 }
 
 uint64_t

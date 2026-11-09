@@ -25,7 +25,8 @@ enum loc_dma_application_phase
     LOC_DA_FREE,
     LOC_DA_HOST_FREE,
     LOC_DA_EXIT,
-    LOC_DA_DESTROY
+    LOC_DA_DESTROY,
+    LOC_DA_HOST_LORA
 };
 
 static inline void

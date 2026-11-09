@@ -32,6 +32,7 @@ uint64_t loc_pim_principal(void);
 /* Trusted selection: CPU=0, analytical bulk=1, functional DMA=2. */
 uint64_t loc_pim_transfer_model(void);
 loc_pim_object loc_pim_alloc(size_t bytes);
+loc_pim_object loc_pim_alloc_placed(size_t rows, size_t columns, loc_pim_object associated);
 uint64_t loc_pim_grant(loc_pim_object object, uint64_t permissions);
 uint64_t loc_pim_free(loc_pim_object object);
 
@@ -84,6 +85,13 @@ uint64_t loc_pim_upload(loc_pim_object object, const void *source,
     size_t bytes);
 uint64_t loc_pim_download(void *destination, loc_pim_object object,
     size_t bytes);
+/* Parent-bounded functional DMA; uploads cannot leave uninitialized holes. */
+uint64_t loc_pim_upload_at(loc_pim_object object, size_t offset,
+    const void *source, size_t bytes);
+uint64_t loc_pim_download_at(void *destination, loc_pim_object object,
+    size_t offset, size_t bytes);
+loc_pim_request loc_pim_axpy_range(loc_pim_object source,
+    loc_pim_object destination, int64_t scalar, size_t offset, size_t bytes);
 uint64_t loc_pim_download_placeholder(void *destination,
     loc_pim_object object, size_t bytes);
 

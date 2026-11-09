@@ -214,3 +214,57 @@ one pass without a bitmap; pooling directly reads image windows without packing;
 k-means finds the closest centroid and accumulates coordinate sums in one
 point-major scan. kNN and k-means consume their prepared feature columns.
 All results still pass independent reference checks outside application timing.
+
+LoRA (`LOC_DMA_APP_KIND=8`) is a synthetic layer-level inference operator:
+`y = W*x + B*(A*x) + bias`, rank 8, scale 1, one input vector per run.
+W/x use the GEMV fixture; A/B and bias are signed deterministic INT32 values
+in [-8,8]. For K<=1024, |Ax|<=64K, |B(Ax)|<=4096K and |y|<=4160K+8,
+so all partial sums fit INT32. Host helpers additionally reject overflow
+using checked INT64 arithmetic. The independent reference checks every output.
+
+The base W*x reuses the two-object streamed-column GEMV mapping, including
+one zero-vector upload, K weight-column uploads, K AXPYs and one download.
+A/B, x and bias remain on the host; host_lora measures A*x followed by B*(Ax),
+and host_finish measures scaling, bias and final combination. Both functions
+run inside the same enclave in secure mode and as the same compiled host
+kernels in Linux mode. All stages are sequential. Capabilities remain fixed
+from setup through free/revocation. This version does not keep W resident.
+
+Use `KEYSTONE_DMA_APPLICATION=lora` with the existing GEMV rows/columns
+controls. `bash configs/keystone/run_lora_batch.sh NEW_TAG` automates native
+ASan/UBSan checks, relevant regressions, a 64x64 full-system smoke pair and
+512x512/1024x1024 secure/unsecured full-boot Timing runs. LeakSanitizer is
+unavailable under the command sandbox's ptrace; the native harness checks
+allocation release explicitly. Results are under experiment/keystone/lora/.
+A trained model, quantization scales and model-quality claims are outside
+this synthetic operator fixture.
+
+
+### Persistent PIMeval placement with preformatted weights
+
+Set `KEYSTONE_DMA_APP_LORA_RESIDENT=1` and `KEYSTONE_DMA_APP_LORA_PLACED=1`.
+The manifest identifies `pimeval_placed_matrix_v2`. W is supplied column-major,
+matching PIMbench GEMV's host input layout. No runtime transpose is performed;
+this assumes an already-formatted model artifact. An upstream row-major model
+conversion must be accounted for separately if required. The synthetic fixture
+is generated directly in that declared layout; it is not a trained-layer test.
+
+One LOC matrix object owns persistent associated PIMeval column allocations;
+one separately protected associated accumulator receives each AXPY. Only two
+LOC capabilities are created. All weights are uploaded through functional Timing
+DMA in blocks of up to 16 columns before the first projection. x[j] remains a
+scalar command argument. A/B and the final combination remain private host work.
+
+Exported allocator regions provide the actual bank and bank-local row mapping.
+DMA uploads/downloads and functional AXPY use the same immutable mapping.
+PIMeval's existing associated-operand AXPY model supplies computation timing.
+Every backend region reserves its full PIM row; logical byte bounds exclude
+padding. Internal backend handles are not additional LOC capability objects.
+The parent lifetime covers all regions and pending operations. Allocation and
+mapping bookkeeping costs remain functional apart from existing LOC service
+budgets; no calibrated allocator or placement-table hardware is claimed.
+
+Legacy contiguous allocations and placed allocations cannot coexist in a run's
+live allocation set; attempts fail rather than letting two allocators overlap.
+This delivery supports single-enclave/Linux projections and same-owner reuse.
+Multi-enclave sharing and new matrix commands are not implemented.

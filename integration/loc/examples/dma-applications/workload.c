@@ -54,8 +54,18 @@ initialize_buffers(void)
             data[(long)i - (long)GUARD_BYTES] = 0xd3;
             data[buffers[b].bytes + i] = 0xd3;
         }
+#if LOC_DMA_APP_LORA_RESIDENT
+        /* Same fixture bytes/cache lines, fewer guest instructions outside ROI. */
+        typedef uint64_t init_word __attribute__((__may_alias__));
+        unsigned long i = 0;
+        for (; buffers[b].bytes - i >= sizeof(init_word); i += sizeof(init_word))
+            *(volatile init_word *)(data + i) = UINT64_C(0xa5a5a5a5a5a5a5a5);
+        for (; i < buffers[b].bytes; ++i)
+            data[i] = 0xa5;
+#else
         for (unsigned long i = 0; i < buffers[b].bytes; ++i)
             data[i] = 0xa5;
+#endif
     }
 }
 
@@ -76,7 +86,21 @@ check_buffers(void)
 }
 
 #if LOC_DMA_APP_BACKEND != 3
-static loc_pim_object
+static loc_pim_object __attribute__((unused))
+record_object(loc_pim_object object, unsigned long permissions)
+{
+    require(object && object_count < LOC_DMA_APP_OBJECTS, 0xfa06);
+#if LOC_DMA_APP_BACKEND == 1
+    require(!loc_pim_grant(object, permissions), 0xfa06);
+    ++grants;
+#else
+    (void)permissions;
+#endif
+    objects[object_count++] = object;
+    return object;
+}
+
+static loc_pim_object __attribute__((unused))
 new_object(unsigned long bytes, unsigned long permissions)
 {
     require(object_count < LOC_DMA_APP_OBJECTS, 0xfa05);
@@ -114,7 +138,8 @@ download(void *data, loc_pim_object object, unsigned long bytes)
     phase_end(LOC_DA_DOWNLOAD);
 }
 
-#if LOC_DMA_APP_KIND != 2 && LOC_DMA_APP_KIND != 6 && LOC_DMA_APP_KIND != 7
+#if LOC_DMA_APP_KIND != 2 && LOC_DMA_APP_KIND != 6 && \
+    LOC_DMA_APP_KIND != 7 && LOC_DMA_APP_KIND != 8
 static void
 command(unsigned long operation, loc_pim_object a, loc_pim_object b,
     loc_pim_object destination)
@@ -125,7 +150,7 @@ command(unsigned long operation, loc_pim_object a, loc_pim_object b,
 }
 #endif
 
-#if LOC_DMA_APP_KIND != 3
+#if LOC_DMA_APP_KIND != 3 && !LOC_DMA_APP_LORA_RESIDENT
 static void
 scalar_command(unsigned long operation, loc_pim_object source, int64_t scalar,
     loc_pim_object destination)
@@ -863,7 +888,7 @@ run_application(void)
 }
 #undef COLUMN_BYTES
 #undef D
-#elif LOC_DMA_APP_KIND == 7
+#elif LOC_DMA_APP_KIND == 7 || LOC_DMA_APP_KIND == 8
 #define K LOC_DMA_APP_GEMV_COLUMNS
 #define MATRIX_BYTES (LOC_DMA_APP_VECTOR_BYTES * K)
 
@@ -885,75 +910,191 @@ static void
 run_application(void)
 {
     int32_t *matrix = new_buffer(MATRIX_BYTES);
-    int32_t *columns = new_buffer(MATRIX_BYTES);
+#if !LOC_DMA_APP_LORA_PLACED
+    int32_t *columns = new_buffer(LOC_DMA_APP_LORA_RESIDENT ?
+        LOC_DMA_APP_VECTOR_BYTES * LOC_DMA_APP_PACK_COLUMNS : MATRIX_BYTES);
+#endif
     int32_t *vectors = new_buffer(4UL * R * K);
     int32_t *zero = new_buffer(LOC_DMA_APP_VECTOR_BYTES);
     int32_t *output = new_buffer(LOC_DMA_APP_VECTOR_BYTES);
     int32_t *result = new_buffer(R * LOC_DMA_APP_VECTOR_BYTES);
+#if LOC_DMA_APP_KIND == 8
+    int32_t *a = new_buffer(4UL * LOC_DMA_APP_LORA_RANK * K);
+    int32_t *b = new_buffer(4UL * N * LOC_DMA_APP_LORA_RANK);
+    int32_t *ax = new_buffer(4UL * R * LOC_DMA_APP_LORA_RANK);
+    int32_t *correction = new_buffer(R * LOC_DMA_APP_VECTOR_BYTES);
+    int32_t *bias = new_buffer(LOC_DMA_APP_VECTOR_BYTES);
+#endif
     phase_end(LOC_DA_HOST_ALLOCATE);
     phase_begin(LOC_DA_INITIALIZE);
     initialize_buffers();
+#if LOC_DMA_APP_LORA_PLACED
+    for (unsigned long row = 0; row < N; ++row) zero[row] = 0;
+    for (unsigned long col = 0; col < K; ++col)
+        for (unsigned long row = 0; row < N; ++row)
+            matrix[col * N + row] = gemv_matrix_value(row, col);
+#else
     for (unsigned long row = 0; row < N; ++row) {
         zero[row] = 0;
         for (unsigned long col = 0; col < K; ++col)
             matrix[row * K + col] = gemv_matrix_value(row, col);
     }
+#endif
     for (unsigned long r = 0; r < R; ++r)
         for (unsigned long col = 0; col < K; ++col)
             vectors[r * K + col] = gemv_vector_value(r, col);
+#if LOC_DMA_APP_KIND == 8
+    for (unsigned long i = 0; i < LOC_DMA_APP_LORA_RANK; ++i)
+        for (unsigned long col = 0; col < K; ++col)
+            a[i * K + col] = (int32_t)((i * 3UL + col * 7UL) % 17UL) - 8;
+    for (unsigned long row = 0; row < N; ++row) {
+        bias[row] = (int32_t)(row % 17UL) - 8;
+        for (unsigned long i = 0; i < LOC_DMA_APP_LORA_RANK; ++i)
+            b[row * LOC_DMA_APP_LORA_RANK + i] =
+                (int32_t)((row * 5UL + i * 11UL) % 17UL) - 8;
+    }
+#endif
     phase_end(LOC_DA_INITIALIZE);
 
     phase_begin(LOC_DA_ALLOCATE_GRANT);
+#if LOC_DMA_APP_LORA_PLACED
+    const loc_pim_object weights = record_object(loc_pim_alloc_placed(N, K, 0),
+        LOC_PIM_INPUT_PERMISSIONS);
+    const loc_pim_object accumulator = record_object(loc_pim_alloc_placed(N, 1, weights),
+        RESULT_PERMISSIONS | LOC_PIM_COPY_TO_PERMISSIONS);
+#else
+#if LOC_DMA_APP_LORA_RESIDENT
+    const loc_pim_object weights = new_object(MATRIX_BYTES,
+        LOC_PIM_INPUT_PERMISSIONS);
+#else
     const loc_pim_object input = new_object(LOC_DMA_APP_VECTOR_BYTES,
         LOC_PIM_INPUT_PERMISSIONS);
+#endif
     const loc_pim_object accumulator = new_object(LOC_DMA_APP_VECTOR_BYTES,
         RESULT_PERMISSIONS | LOC_PIM_COPY_TO_PERMISSIONS);
+#endif
     phase_end(LOC_DA_ALLOCATE_GRANT);
 
+#if LOC_DMA_APP_LORA_RESIDENT
+    /* One parent object; column-major blocks extend its initialized prefix. */
+    for (unsigned long first = 0; first < K; first += LOC_DMA_APP_PACK_COLUMNS) {
+        const unsigned long count = K - first < LOC_DMA_APP_PACK_COLUMNS ?
+            K - first : LOC_DMA_APP_PACK_COLUMNS;
+#if !LOC_DMA_APP_LORA_PLACED
+        phase_begin(LOC_DA_HOST_PREPARE);
+        loc_host_gemv_pack_columns(matrix, columns, N, K, first, count);
+        phase_end(LOC_DA_HOST_PREPARE);
+#endif
+        phase_begin(LOC_DA_UPLOAD);
+        const unsigned long bytes = count * LOC_DMA_APP_VECTOR_BYTES;
+        require(!loc_pim_upload_at(weights, first * LOC_DMA_APP_VECTOR_BYTES,
+#if LOC_DMA_APP_LORA_PLACED
+            matrix + first * N,
+#else
+            columns,
+#endif
+            bytes), 0xfa92);
+        ++uploads;
+        upload_bytes += bytes;
+        phase_end(LOC_DA_UPLOAD);
+    }
+#else
     phase_begin(LOC_DA_HOST_PREPARE);
     loc_host_gemv_pack(matrix, columns, N, K);
     phase_end(LOC_DA_HOST_PREPARE);
+#endif
     for (unsigned long r = 0; r < R; ++r) {
-        /* AXPY consumes one matrix column and a private host scalar. Both
-         * objects and their permission masks stay fixed across all rounds. */
         upload(accumulator, zero, LOC_DMA_APP_VECTOR_BYTES);
         for (unsigned long col = 0; col < K; ++col) {
+#if LOC_DMA_APP_LORA_RESIDENT
+            phase_begin(LOC_DA_COMPUTE);
+            const loc_pim_request request = loc_pim_axpy_range(weights,
+                accumulator, vectors[r * K + col],
+                col * LOC_DMA_APP_VECTOR_BYTES, LOC_DMA_APP_VECTOR_BYTES);
+            require(request && !loc_pim_complete(request), 0xfa93);
+            ++commands;
+#else
             upload(input, columns + col * N, LOC_DMA_APP_VECTOR_BYTES);
             phase_begin(LOC_DA_COMPUTE);
             scalar_command(M5_PIM_OP_AXPY_INT32, input,
                 vectors[r * K + col], accumulator);
+#endif
             phase_end(LOC_DA_COMPUTE);
         }
         download(output, accumulator, LOC_DMA_APP_VECTOR_BYTES);
+#if LOC_DMA_APP_KIND == 8
+        phase_begin(LOC_DA_HOST_LORA);
+        require(loc_host_lora_adapter(a, b, vectors + r * K,
+            ax + r * LOC_DMA_APP_LORA_RANK, correction + r * N,
+            N, K, LOC_DMA_APP_LORA_RANK), 0xfa90);
+        phase_end(LOC_DA_HOST_LORA);
         phase_begin(LOC_DA_HOST_FINISH);
-        /* Materialize each output before reusing the download buffer. This
-         * measured host copy is a layout choice, not part of GEMV algebra. */
+        require(loc_host_lora_combine(output, correction + r * N, bias,
+            result + r * N, N, LOC_DMA_APP_LORA_SCALE), 0xfa91);
+#else
+        phase_begin(LOC_DA_HOST_FINISH);
         loc_host_gemv_store_result(output, result + r * N, N);
+#endif
         phase_end(LOC_DA_HOST_FINISH);
     }
 
     phase_begin(LOC_DA_CHECK);
+#if LOC_DMA_APP_KIND == 8
+    int64_t reference_ax[R * LOC_DMA_APP_LORA_RANK];
+    for (unsigned long r = 0; r < R; ++r)
+        for (unsigned long i = 0; i < LOC_DMA_APP_LORA_RANK; ++i) {
+            int64_t sum = 0;
+            for (unsigned long col = 0; col < K; ++col)
+                sum += (int64_t)a[i * K + col] * vectors[r * K + col];
+            reference_ax[r * LOC_DMA_APP_LORA_RANK + i] = sum;
+            require(sum >= -(int64_t)LOC_DMA_APP_LORA_AX_BOUND &&
+                sum <= (int64_t)LOC_DMA_APP_LORA_AX_BOUND &&
+                ax[r * LOC_DMA_APP_LORA_RANK + i] == sum, 0xfa92);
+        }
+#endif
     for (unsigned long r = 0; r < R; ++r)
         for (unsigned long col = 0; col < K; ++col)
             require(vectors[r * K + col] == gemv_vector_value(r, col), 0xfa80);
     for (unsigned long row = 0; row < N; ++row) {
         require(zero[row] == 0, 0xfa81);
         for (unsigned long col = 0; col < K; ++col) {
-            require(matrix[row * K + col] == gemv_matrix_value(row, col),
+            require(matrix[LOC_DMA_APP_LORA_PLACED ? col * N + row : row * K + col]
+                == gemv_matrix_value(row, col),
                 0xfa82);
+#if LOC_DMA_APP_LORA_PLACED
+            /* All original weight values were independently checked above. */
+#elif !LOC_DMA_APP_LORA_RESIDENT
             require(columns[col * N + row] == matrix[row * K + col], 0xfa83);
+#else
+            const unsigned long last = ((K - 1) / LOC_DMA_APP_PACK_COLUMNS) * LOC_DMA_APP_PACK_COLUMNS;
+            if (col >= last)
+                require(columns[(col - last) * N + row] == matrix[row * K + col], 0xfa83);
+#endif
         }
         for (unsigned long r = 0; r < R; ++r) {
             /* Independent row-major dot product, without using the packed
              * operands. K<=1024 and inputs in [-8,8] bound |sum|<=65536. */
             int64_t expected = 0;
             for (unsigned long col = 0; col < K; ++col)
-                expected += (int64_t)matrix[row * K + col] *
+                expected += (int64_t)(LOC_DMA_APP_LORA_PLACED ?
+                    gemv_matrix_value(row, col) : matrix[row * K + col]) *
                     vectors[r * K + col];
             require(expected >= INT32_MIN && expected <= INT32_MAX &&
+                (r + 1UL != R || output[row] == expected), 0xfa85);
+#if LOC_DMA_APP_KIND == 8
+            /* Independent reference recomputes each rank component directly
+             * from row-major A/B; it does not trust ax or correction. */
+            int64_t reference_correction = 0;
+            for (unsigned long i = 0; i < LOC_DMA_APP_LORA_RANK; ++i) {
+                reference_correction += reference_ax[r * LOC_DMA_APP_LORA_RANK + i] *
+                    b[row * LOC_DMA_APP_LORA_RANK + i];
+            }
+            require(correction[r * N + row] == reference_correction, 0xfa93);
+            expected += reference_correction * LOC_DMA_APP_LORA_SCALE +
+                bias[row];
+#endif
+            require(expected >= INT32_MIN && expected <= INT32_MAX &&
                 result[r * N + row] == expected, 0xfa84);
-            if (r + 1UL == R)
-                require(output[row] == expected, 0xfa85);
         }
     }
 }

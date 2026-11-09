@@ -40,6 +40,13 @@ void loc_host_gemv_pack(const int32_t *matrix, int32_t *columns,
     size_t rows, size_t column_count);
 void loc_host_gemv_store_result(const int32_t *output, int32_t *result,
     size_t rows);
+/* Returns zero on arithmetic overflow; intermediates use INT64 so rejection
+ * never itself invokes signed overflow. Dimensions are benchmark-bounded. */
+int loc_host_lora_adapter(const int32_t *a, const int32_t *b,
+    const int32_t *x, int32_t *ax, int32_t *correction,
+    size_t rows, size_t columns, size_t rank);
+int loc_host_lora_combine(const int32_t *base, const int32_t *correction,
+    const int32_t *bias, int32_t *result, size_t rows, int32_t scale);
 void loc_host_kmeans_assign(const int32_t *distances, int32_t *best,
     uint32_t *assignment, size_t count, unsigned cluster);
 void loc_host_kmeans_update(const struct point *points,
@@ -51,3 +58,6 @@ void loc_host_kmeans_update(const struct point *points,
 #endif
 
 #endif
+
+void loc_host_gemv_pack_columns(const int32_t *matrix, int32_t *columns,
+    size_t rows, size_t column_count, size_t first, size_t count);
