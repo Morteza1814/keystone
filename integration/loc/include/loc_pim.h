@@ -34,6 +34,14 @@ uint64_t loc_pim_transfer_model(void);
 loc_pim_object loc_pim_alloc(size_t bytes);
 loc_pim_object loc_pim_alloc_placed(size_t rows, size_t columns, loc_pim_object associated);
 uint64_t loc_pim_grant(loc_pim_object object, uint64_t permissions);
+/* Owner-only FS sharing. Recipient is a live monitor-issued lifetime
+ * principal, never a Linux PID, EID alone, or caller-selected identity.
+ * Revoke rejects new admissions; already admitted work retains its holds
+ * and may finish. Passing a principal selects a recipient, not the caller.
+ */
+uint64_t loc_pim_grant_to(loc_pim_object object, uint64_t principal,
+    uint64_t permissions);
+uint64_t loc_pim_revoke_from(loc_pim_object object, uint64_t principal);
 uint64_t loc_pim_free(loc_pim_object object);
 
 /* Validation only, not a transferable authorization or an allocation-bound

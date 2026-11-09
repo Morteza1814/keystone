@@ -76,6 +76,18 @@ loc_pim_principal(void)
 }
 
 uint64_t
+loc_pim_grant_to(loc_pim_object object, uint64_t principal, uint64_t permissions)
+{
+    return m5_pim_obj_grant_to(object, principal, 0, permissions);
+}
+
+uint64_t
+loc_pim_revoke_from(loc_pim_object object, uint64_t principal)
+{
+    return m5_pim_obj_revoke_from(object, principal, 0);
+}
+
+uint64_t
 loc_pim_transfer_model(void)
 {
     return m5_pim_transfer(M5_PIM_TRANSFER_MODEL, 0, 0, 0, 0);
