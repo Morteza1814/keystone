@@ -3,6 +3,7 @@
  * the same host algorithms and submit the same data/commands. Backend 3 uses
  * fused CPU algorithms and contains no DMA or PIM pseudo-instruction calls. */
 #include "host_kernels.h"
+#include "command_kernels.h"
 
 #define N LOC_DMA_APP_ELEMENTS
 #define R LOC_DMA_APP_ROUNDS
@@ -24,6 +25,9 @@ static loc_pim_object objects[LOC_DMA_APP_OBJECTS];
 #endif
 static unsigned long object_count, grants, uploads, downloads, commands;
 static unsigned long upload_bytes, download_bytes;
+#if LOC_DMA_APP_REPEATED_LIFECYCLES
+static unsigned long freed_objects;
+#endif
 
 static void
 require(int condition, unsigned long error)
@@ -83,6 +87,14 @@ check_buffers(void)
         downloads == LOC_DMA_APP_DOWNLOADS && commands == LOC_DMA_APP_COMMANDS &&
         upload_bytes == LOC_DMA_APP_UPLOAD_BYTES &&
         download_bytes == LOC_DMA_APP_DOWNLOAD_BYTES, 0xfa04);
+#if LOC_DMA_APP_BACKEND != 3
+    /* Fixture-wide handle uniqueness is a correctness check, not allocation
+     * work. Keep it outside measured sequences so later samples do not scan
+     * increasingly long histories of objects that have already been freed. */
+    for (unsigned long i = 0; i < object_count; ++i)
+        for (unsigned long j = 0; j < i; ++j)
+            require(objects[i] != objects[j], 0xfa07);
+#endif
 }
 
 #if LOC_DMA_APP_BACKEND != 3
@@ -112,8 +124,6 @@ new_object(unsigned long bytes, unsigned long permissions)
 #else
     (void)permissions;
 #endif
-    for (unsigned long i = 0; i < object_count; ++i)
-        require(object != objects[i], 0xfa07);
     objects[object_count++] = object;
     return object;
 }
@@ -140,7 +150,7 @@ download(void *data, loc_pim_object object, unsigned long bytes)
 
 #if LOC_DMA_APP_KIND != 2 && LOC_DMA_APP_KIND != 6 && \
     LOC_DMA_APP_KIND != 7 && LOC_DMA_APP_KIND != 8
-static void
+static void __attribute__((unused))
 command(unsigned long operation, loc_pim_object a, loc_pim_object b,
     loc_pim_object destination)
 {
@@ -151,7 +161,7 @@ command(unsigned long operation, loc_pim_object a, loc_pim_object b,
 #endif
 
 #if LOC_DMA_APP_KIND != 3 && !LOC_DMA_APP_LORA_RESIDENT
-static void
+static void __attribute__((unused))
 scalar_command(unsigned long operation, loc_pim_object source, int64_t scalar,
     loc_pim_object destination)
 {
@@ -163,6 +173,56 @@ scalar_command(unsigned long operation, loc_pim_object source, int64_t scalar,
 #endif
 
 #endif /* PIM backend helpers */
+
+#if LOC_DMA_APP_KIND == 9
+static int32_t vecadd_a(unsigned long i) { return (int32_t)(i % 257UL) - 128; }
+static int32_t vecadd_b(unsigned long i) { return 127 - (int32_t)(i % 251UL); }
+
+static void
+run_application(void)
+{
+    int32_t *a = new_buffer(LOC_DMA_APP_VECTOR_BYTES);
+    int32_t *b = new_buffer(LOC_DMA_APP_VECTOR_BYTES);
+    int32_t *results = new_buffer(R * LOC_DMA_APP_VECTOR_BYTES);
+    phase_end(LOC_DA_HOST_ALLOCATE);
+    phase_begin(LOC_DA_INITIALIZE);
+    initialize_buffers();
+    for (unsigned long i = 0; i < N; ++i) {
+        a[i] = vecadd_a(i);
+        b[i] = vecadd_b(i);
+    }
+    phase_end(LOC_DA_INITIALIZE);
+    for (unsigned long cycle = 0; cycle < LOC_DMA_APP_LIFECYCLES; ++cycle) {
+    phase_begin(LOC_DA_ALLOCATE_GRANT);
+    const loc_pim_object pa = new_object(LOC_DMA_APP_VECTOR_BYTES, LOC_PIM_INPUT_PERMISSIONS);
+    const loc_pim_object pb = new_object(LOC_DMA_APP_VECTOR_BYTES, LOC_PIM_INPUT_PERMISSIONS);
+    const loc_pim_object pc = new_object(LOC_DMA_APP_VECTOR_BYTES, RESULT_PERMISSIONS);
+    phase_end(LOC_DA_ALLOCATE_GRANT);
+    for (unsigned long r = LOC_DMA_APP_COMPLETE_LIFECYCLES ? cycle : 0;
+         r < (LOC_DMA_APP_COMPLETE_LIFECYCLES ? cycle + 1 : R); ++r) {
+        upload(pa, a, LOC_DMA_APP_VECTOR_BYTES);
+        upload(pb, b, LOC_DMA_APP_VECTOR_BYTES);
+        require(!loc_command_binary(M5_PIM_OP_ADD_INT32, pa, pb, pc, &commands), 0xfab0);
+        /* Retain every result for later checking without a timed CPU copy. */
+        download(results + r * N, pc, LOC_DMA_APP_VECTOR_BYTES);
+    }
+#if LOC_DMA_APP_COMPLETE_LIFECYCLES
+    phase_begin(LOC_DA_FREE);
+    for (; freed_objects < object_count; ++freed_objects)
+        require(!loc_pim_free(objects[freed_objects]), 0xfa0c);
+    phase_end(LOC_DA_FREE);
+#endif
+    }
+    phase_begin(LOC_DA_CHECK);
+    for (unsigned long i = 0; i < N; ++i) {
+        const int64_t expected = (int64_t)vecadd_a(i) + vecadd_b(i);
+        require(expected >= INT32_MIN && expected <= INT32_MAX &&
+            a[i] == vecadd_a(i) && b[i] == vecadd_b(i), 0xfab1);
+        for (unsigned long r = 0; r < R; ++r)
+            require(results[r * N + i] == expected, 0xfab2);
+    }
+}
+#endif
 
 #if LOC_DMA_APP_KIND == 1 || LOC_DMA_APP_KIND == 4
 static int32_t
@@ -956,6 +1016,7 @@ run_application(void)
 #endif
     phase_end(LOC_DA_INITIALIZE);
 
+    for (unsigned long cycle = 0; cycle < LOC_DMA_APP_LORA_LIFECYCLES; ++cycle) {
     phase_begin(LOC_DA_ALLOCATE_GRANT);
 #if LOC_DMA_APP_LORA_PLACED
     const loc_pim_object weights = record_object(loc_pim_alloc_placed(N, K, 0),
@@ -1003,24 +1064,21 @@ run_application(void)
     loc_host_gemv_pack(matrix, columns, N, K);
     phase_end(LOC_DA_HOST_PREPARE);
 #endif
-    for (unsigned long r = 0; r < R; ++r) {
+    for (unsigned long r = LOC_DMA_APP_LORA_LIFECYCLE_WARMUP_ROUNDS ? cycle : 0;
+         r < (LOC_DMA_APP_LORA_LIFECYCLE_WARMUP_ROUNDS ? cycle + 1 : R); ++r) {
         upload(accumulator, zero, LOC_DMA_APP_VECTOR_BYTES);
-        for (unsigned long col = 0; col < K; ++col) {
 #if LOC_DMA_APP_LORA_RESIDENT
-            phase_begin(LOC_DA_COMPUTE);
-            const loc_pim_request request = loc_pim_axpy_range(weights,
-                accumulator, vectors[r * K + col],
-                col * LOC_DMA_APP_VECTOR_BYTES, LOC_DMA_APP_VECTOR_BYTES);
-            require(request && !loc_pim_complete(request), 0xfa93);
-            ++commands;
+        require(!loc_command_gemv(weights, accumulator, vectors + r * K,
+            K, LOC_DMA_APP_VECTOR_BYTES, &commands), 0xfa93);
 #else
+        for (unsigned long col = 0; col < K; ++col) {
             upload(input, columns + col * N, LOC_DMA_APP_VECTOR_BYTES);
             phase_begin(LOC_DA_COMPUTE);
             scalar_command(M5_PIM_OP_AXPY_INT32, input,
                 vectors[r * K + col], accumulator);
-#endif
             phase_end(LOC_DA_COMPUTE);
         }
+#endif
         download(output, accumulator, LOC_DMA_APP_VECTOR_BYTES);
 #if LOC_DMA_APP_KIND == 8
         phase_begin(LOC_DA_HOST_LORA);
@@ -1037,6 +1095,14 @@ run_application(void)
 #endif
         phase_end(LOC_DA_HOST_FINISH);
     }
+
+#if LOC_DMA_APP_LORA_LIFECYCLE_WARMUP_ROUNDS
+    phase_begin(LOC_DA_FREE);
+    for (; freed_objects < object_count; ++freed_objects)
+        require(!loc_pim_free(objects[freed_objects]), 0xfa0c);
+    phase_end(LOC_DA_FREE);
+#endif
+    } /* complete PIM lifecycle; all outputs checked after final release */
 
     phase_begin(LOC_DA_CHECK);
 #if LOC_DMA_APP_KIND == 8
@@ -1116,7 +1182,7 @@ run_workload(void)
     run_application();
     check_buffers();
     phase_end(LOC_DA_CHECK);
-#if LOC_DMA_APP_BACKEND != 3
+#if LOC_DMA_APP_BACKEND != 3 && !LOC_DMA_APP_REPEATED_LIFECYCLES
     phase_begin(LOC_DA_FREE);
     for (unsigned long i = 0; i < object_count; ++i)
         require(!loc_pim_free(objects[i]), 0xfa0c);

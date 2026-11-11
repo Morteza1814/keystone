@@ -20,7 +20,20 @@ main(void)
 #else
     printf("{");
 #endif
+#if LOC_DMA_APP_KIND == 9
+    printf("\"complete_pim_lifecycles\":%d,\"pim_lifecycles\":%lu,",
+        LOC_DMA_APP_COMPLETE_LIFECYCLES, (unsigned long)LOC_DMA_APP_LIFECYCLES);
+#endif
 #if LOC_DMA_APP_KIND == 8
+    printf("\"lora_lifecycle_warmup_rounds\":%lu,\"lora_lifecycles\":%lu,",
+        (unsigned long)LOC_DMA_APP_LORA_LIFECYCLE_WARMUP_ROUNDS,
+        (unsigned long)LOC_DMA_APP_LORA_LIFECYCLES);
+    if (LOC_DMA_APP_LORA_LIFECYCLE_WARMUP_ROUNDS)
+        printf("\"lora_lifecycle_measured_rounds\":%lu,",
+            (unsigned long)(LOC_DMA_APP_ROUNDS - LOC_DMA_APP_LORA_LIFECYCLE_WARMUP_ROUNDS));
+    printf("\"lora_warmup_rounds\":%lu,\"lora_measured_rounds\":%lu,",
+        (unsigned long)LOC_DMA_APP_LORA_WARMUP_ROUNDS,
+        (unsigned long)(LOC_DMA_APP_ROUNDS - LOC_DMA_APP_LORA_WARMUP_ROUNDS));
     if (LOC_DMA_APP_LORA_RESIDENT)
         printf("\"lora_weight_layout\":\"%s\",", LOC_DMA_APP_LORA_PLACED ?
             "pimeval_placed_matrix_v2" : "matrix_object_v1");
@@ -69,13 +82,16 @@ main(void)
     if (LOC_DMA_APP_PREPARE_PHASES)
         printf("\"host_prepare\":%lu,", (unsigned long)LOC_DMA_APP_PREPARE_PHASES);
     printf("\"upload_inputs\":%lu,\"pim_compute\":%lu,"
-        "\"download_results\":%lu,\"host_finish\":%lu},"
-        "\"operation_counts\":{",
+        "\"download_results\":%lu",
         (unsigned long)LOC_DMA_APP_UPLOADS,
         (unsigned long)LOC_DMA_APP_COMPUTE_PHASES,
-        (unsigned long)LOC_DMA_APP_DOWNLOADS,
-        (unsigned long)LOC_DMA_APP_HOST_FINISH_PHASES);
-#if LOC_DMA_APP_KIND == 1
+        (unsigned long)LOC_DMA_APP_DOWNLOADS);
+    if (LOC_DMA_APP_HOST_FINISH_PHASES)
+        printf(",\"host_finish\":%lu", (unsigned long)LOC_DMA_APP_HOST_FINISH_PHASES);
+    printf("},\"operation_counts\":{");
+#if LOC_DMA_APP_KIND == 9
+    printf("\"addInt32\":%lu", (unsigned long)LOC_DMA_APP_ROUNDS);
+#elif LOC_DMA_APP_KIND == 1
     printf("\"addInt32\":%lu,\"subScalarInt32\":%lu,\"absInt32\":%lu",
         (unsigned long)LOC_DMA_APP_ROUNDS,
         2UL * LOC_DMA_APP_ROUNDS, 2UL * LOC_DMA_APP_ROUNDS);
