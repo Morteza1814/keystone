@@ -131,7 +131,15 @@ new_object(unsigned long bytes, unsigned long permissions)
 static void
 upload(loc_pim_object object, const void *data, unsigned long bytes)
 {
+#if LOC_DMA_APP_CACHE_RANGE_MARKERS
+    /* Opt-in simulator conditioning marker, not a DMA authorization handle.
+     * The runner obtains the size from the validated workload manifest. */
+    __asm__ volatile("" ::: "memory");
+    m5_work_begin(LOC_DA_UPLOAD, (unsigned long)data);
+    __asm__ volatile("" ::: "memory");
+#else
     phase_begin(LOC_DA_UPLOAD);
+#endif
     require(!loc_pim_upload(object, data, bytes), 0xfa08);
     ++uploads;
     upload_bytes += bytes;
