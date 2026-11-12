@@ -15,4 +15,8 @@ uint64_t loc_command_gemv(loc_pim_object weights, loc_pim_object accumulator,
 uint64_t loc_command_binary(uint64_t operation, loc_pim_object a,
     loc_pim_object b, loc_pim_object destination, unsigned long *commands);
 
+/* Scalar command submission; AXPY reads and updates destination. */
+uint64_t loc_command_scalar(uint64_t operation, loc_pim_object source,
+    int64_t scalar, loc_pim_object destination, unsigned long *commands);
+
 #endif

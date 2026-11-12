@@ -44,3 +44,20 @@ loc_command_gemv(loc_pim_object weights, loc_pim_object accumulator,
     }
     return 0;
 }
+
+__attribute__((noinline, aligned(64))) uint64_t
+loc_command_scalar(uint64_t operation, loc_pim_object source, int64_t scalar,
+    loc_pim_object destination, unsigned long *commands)
+{
+    if (*commands == ULONG_MAX)
+        return M5_PIM_STATUS_INVALID_REQUEST;
+    phase_begin(LOC_DA_COMPUTE);
+    const loc_pim_request request =
+        loc_pim_submit_scalar(operation, source, scalar, destination);
+    const uint64_t status = request ? loc_pim_complete(request) :
+        M5_PIM_STATUS_INVALID_REQUEST;
+    if (!status)
+        ++*commands;
+    phase_end(LOC_DA_COMPUTE);
+    return status;
+}

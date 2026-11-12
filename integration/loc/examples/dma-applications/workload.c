@@ -182,7 +182,7 @@ scalar_command(unsigned long operation, loc_pim_object source, int64_t scalar,
 
 #endif /* PIM backend helpers */
 
-#if LOC_DMA_APP_KIND == 9
+#if LOC_DMA_APP_KIND == 9 || LOC_DMA_APP_KIND == 10
 static int32_t vecadd_a(unsigned long i) { return (int32_t)(i % 257UL) - 128; }
 static int32_t vecadd_b(unsigned long i) { return 127 - (int32_t)(i % 251UL); }
 
@@ -203,14 +203,25 @@ run_application(void)
     for (unsigned long cycle = 0; cycle < LOC_DMA_APP_LIFECYCLES; ++cycle) {
     phase_begin(LOC_DA_ALLOCATE_GRANT);
     const loc_pim_object pa = new_object(LOC_DMA_APP_VECTOR_BYTES, LOC_PIM_INPUT_PERMISSIONS);
+#if LOC_DMA_APP_KIND == 10
+    const loc_pim_object pb = new_object(LOC_DMA_APP_VECTOR_BYTES,
+        RESULT_PERMISSIONS | LOC_PIM_COPY_TO_PERMISSIONS);
+    const loc_pim_object pc = pb; /* AXPY updates uploaded Y in place. */
+#else
     const loc_pim_object pb = new_object(LOC_DMA_APP_VECTOR_BYTES, LOC_PIM_INPUT_PERMISSIONS);
     const loc_pim_object pc = new_object(LOC_DMA_APP_VECTOR_BYTES, RESULT_PERMISSIONS);
+#endif
     phase_end(LOC_DA_ALLOCATE_GRANT);
     for (unsigned long r = LOC_DMA_APP_COMPLETE_LIFECYCLES ? cycle : 0;
          r < (LOC_DMA_APP_COMPLETE_LIFECYCLES ? cycle + 1 : R); ++r) {
         upload(pa, a, LOC_DMA_APP_VECTOR_BYTES);
         upload(pb, b, LOC_DMA_APP_VECTOR_BYTES);
+#if LOC_DMA_APP_KIND == 10
+        require(!loc_command_scalar(M5_PIM_OP_AXPY_INT32, pa,
+            LOC_DMA_APP_AXPY_SCALAR, pc, &commands), 0xfab0);
+#else
         require(!loc_command_binary(M5_PIM_OP_ADD_INT32, pa, pb, pc, &commands), 0xfab0);
+#endif
         /* Retain every result for later checking without a timed CPU copy. */
         download(results + r * N, pc, LOC_DMA_APP_VECTOR_BYTES);
     }
@@ -223,9 +234,96 @@ run_application(void)
     }
     phase_begin(LOC_DA_CHECK);
     for (unsigned long i = 0; i < N; ++i) {
+#if LOC_DMA_APP_KIND == 10
+        const int64_t product = (int64_t)LOC_DMA_APP_AXPY_SCALAR * vecadd_a(i);
+        const int64_t expected = product + vecadd_b(i);
+        require(product >= INT32_MIN && product <= INT32_MAX, 0xfab3);
+#else
         const int64_t expected = (int64_t)vecadd_a(i) + vecadd_b(i);
+#endif
         require(expected >= INT32_MIN && expected <= INT32_MAX &&
             a[i] == vecadd_a(i) && b[i] == vecadd_b(i), 0xfab1);
+        for (unsigned long r = 0; r < R; ++r)
+            require(results[r * N + i] == expected, 0xfab2);
+    }
+}
+#endif
+
+#if LOC_DMA_APP_KIND == 11 || LOC_DMA_APP_KIND == 12
+#if LOC_DMA_APP_KIND == 12
+typedef int16_t unary_element;
+static unary_element unary_input(unsigned long i)
+{
+    /* Endpoint values occur even in the smallest fixture. */
+    static const int16_t pixels[] = {0, 255, 1, 254, 127, 128, 235, 236};
+    return i < 8 ? pixels[i] : (int16_t)((i * 37UL) % 256UL);
+}
+#else
+typedef int32_t unary_element;
+static unary_element unary_input(unsigned long i)
+{
+    static const int32_t edges[] = {-128, 128, -1, 0, 1, -64, 64, 127};
+    return i < 8 ? edges[i] : (int32_t)(i % 257UL) - 128;
+}
+#endif
+
+static void
+run_application(void)
+{
+    unary_element *input = new_buffer(LOC_DMA_APP_VECTOR_BYTES);
+    unary_element *results = new_buffer(R * LOC_DMA_APP_VECTOR_BYTES);
+    phase_end(LOC_DA_HOST_ALLOCATE);
+    phase_begin(LOC_DA_INITIALIZE);
+    initialize_buffers();
+    for (unsigned long i = 0; i < N; ++i)
+        input[i] = unary_input(i);
+    phase_end(LOC_DA_INITIALIZE);
+    for (unsigned long cycle = 0; cycle < LOC_DMA_APP_LIFECYCLES; ++cycle) {
+        phase_begin(LOC_DA_ALLOCATE_GRANT);
+        const loc_pim_object source = new_object(LOC_DMA_APP_VECTOR_BYTES,
+            LOC_PIM_INPUT_PERMISSIONS);
+#if LOC_DMA_APP_KIND == 12
+        const loc_pim_object added = new_object(LOC_DMA_APP_VECTOR_BYTES,
+            WORKSPACE_PERMISSIONS);
+        const loc_pim_object clipped = new_object(LOC_DMA_APP_VECTOR_BYTES,
+            WORKSPACE_PERMISSIONS);
+#endif
+        const loc_pim_object result = new_object(LOC_DMA_APP_VECTOR_BYTES,
+            RESULT_PERMISSIONS);
+        phase_end(LOC_DA_ALLOCATE_GRANT);
+        for (unsigned long r = LOC_DMA_APP_COMPLETE_LIFECYCLES ? cycle : 0;
+             r < (LOC_DMA_APP_COMPLETE_LIFECYCLES ? cycle + 1 : R); ++r) {
+            upload(source, input, LOC_DMA_APP_VECTOR_BYTES);
+#if LOC_DMA_APP_KIND == 12
+            require(!loc_command_scalar(M5_PIM_OP_ADD_SCALAR_INT16, source,
+                LOC_DMA_APP_BRIGHTNESS_OFFSET, added, &commands), 0xfab0);
+            require(!loc_command_scalar(M5_PIM_OP_MIN_SCALAR_INT16, added,
+                255, clipped, &commands), 0xfab0);
+            require(!loc_command_scalar(M5_PIM_OP_MAX_SCALAR_INT16, clipped,
+                0, result, &commands), 0xfab0);
+#else
+            require(!loc_command_binary(M5_PIM_OP_RELU_INT32, source, 0,
+                result, &commands), 0xfab0);
+#endif
+            download(results + r * N, result, LOC_DMA_APP_VECTOR_BYTES);
+        }
+#if LOC_DMA_APP_COMPLETE_LIFECYCLES
+        phase_begin(LOC_DA_FREE);
+        for (; freed_objects < object_count; ++freed_objects)
+            require(!loc_pim_free(objects[freed_objects]), 0xfa0c);
+        phase_end(LOC_DA_FREE);
+#endif
+    }
+    phase_begin(LOC_DA_CHECK);
+    for (unsigned long i = 0; i < N; ++i) {
+        int64_t expected = unary_input(i);
+#if LOC_DMA_APP_KIND == 12
+        expected += LOC_DMA_APP_BRIGHTNESS_OFFSET;
+        require(expected >= INT16_MIN && expected <= INT16_MAX, 0xfab3);
+        if (expected > 255) expected = 255;
+#endif
+        if (expected < 0) expected = 0;
+        require(input[i] == unary_input(i), 0xfab1);
         for (unsigned long r = 0; r < R; ++r)
             require(results[r * N + i] == expected, 0xfab2);
     }
@@ -294,6 +392,7 @@ distance(loc_pim_object x, loc_pim_object y, loc_pim_object dx,
 static int32_t
 query_coordinate(unsigned long round, unsigned long axis)
 {
+    if (LOC_DMA_APP_COMPLETE_LIFECYCLES) round = 0;
     return ((int32_t)(round % 3UL) - 1) * 64 +
         (int32_t)((round * 5UL + axis * 3UL) % 17UL) - 8;
 }
@@ -305,7 +404,7 @@ run_application(void)
     int32_t *x = new_buffer(LOC_DMA_APP_VECTOR_BYTES);
     int32_t *y = new_buffer(LOC_DMA_APP_VECTOR_BYTES);
 #if LOC_DMA_APP_BACKEND != 3
-    int32_t *distances = new_buffer(LOC_DMA_APP_VECTOR_BYTES);
+    int32_t *all_distances = new_buffer(R * LOC_DMA_APP_VECTOR_BYTES);
 #endif
     uint32_t *predictions = new_buffer(R * sizeof(*predictions));
     unsigned long *neighbors = new_buffer(R * LOC_DMA_APP_K * sizeof(*neighbors));
@@ -314,6 +413,7 @@ run_application(void)
     initialize_buffers();
     initialize_points(points);
     phase_end(LOC_DA_INITIALIZE);
+    for (unsigned long cycle = 0; cycle < LOC_DMA_APP_LIFECYCLES; ++cycle) {
 #if LOC_DMA_APP_BACKEND != 3
     phase_begin(LOC_DA_ALLOCATE_GRANT);
     const loc_pim_object px = new_object(LOC_DMA_APP_VECTOR_BYTES,
@@ -332,12 +432,14 @@ run_application(void)
     upload(py, y, LOC_DMA_APP_VECTOR_BYTES);
 #endif
 
-    for (unsigned long r = 0; r < R; ++r) {
+    for (unsigned long r = LOC_DMA_APP_COMPLETE_LIFECYCLES ? cycle : 0;
+         r < (LOC_DMA_APP_COMPLETE_LIFECYCLES ? cycle + 1 : R); ++r) {
 #if LOC_DMA_APP_BACKEND == 3
         phase_begin(LOC_DA_COMPUTE);
         const int32_t qx = query_coordinate(r, 0);
         const int32_t qy = query_coordinate(r, 1);
 #else
+        int32_t *distances = all_distances + r * N;
         distance(px, py, dx, dy, query_coordinate(r, 0), query_coordinate(r, 1));
         download(distances, dx, LOC_DMA_APP_VECTOR_BYTES);
         phase_begin(LOC_DA_HOST_FINISH);
@@ -390,9 +492,24 @@ run_application(void)
         phase_end(LOC_DA_HOST_FINISH);
 #endif
     }
+#if LOC_DMA_APP_COMPLETE_LIFECYCLES
+    phase_begin(LOC_DA_FREE);
+    for (; freed_objects < object_count; ++freed_objects)
+        require(!loc_pim_free(objects[freed_objects]), 0xfa0c);
+    phase_end(LOC_DA_FREE);
+#endif
+    }
     phase_begin(LOC_DA_CHECK);
     check_points(points, x, y);
     for (unsigned long r = 0; r < R; ++r) {
+#if LOC_DMA_APP_BACKEND != 3
+        for (unsigned long i = 0; i < N; ++i) {
+            const int64_t a = (int64_t)points[i].x - query_coordinate(r, 0);
+            const int64_t b = (int64_t)points[i].y - query_coordinate(r, 1);
+            const int64_t expected = (a < 0 ? -a : a) + (b < 0 ? -b : b);
+            require(expected <= 294 && all_distances[r * N + i] == expected, 0xfa13);
+        }
+#endif
         unsigned long chosen[LOC_DMA_APP_K];
         unsigned long votes[3] = {0, 0, 0};
         /* Independent reference: rescan every point to select each neighbor.
@@ -440,6 +557,7 @@ key_value(unsigned long index)
 static uint64_t
 threshold_value(unsigned long round)
 {
+    if (LOC_DMA_APP_COMPLETE_LIFECYCLES) round = 0;
     switch (round % 3UL) {
       case 0: return UINT64_C(0x8000000000000040);
       case 1: return 0;
@@ -452,7 +570,7 @@ run_application(void)
 {
     uint64_t *keys = new_buffer(N * sizeof(*keys));
 #if LOC_DMA_APP_BACKEND != 3
-    unsigned char *mask = new_buffer(LOC_DMA_APP_MASK_BYTES);
+    unsigned char *all_masks = new_buffer(R * LOC_DMA_APP_MASK_BYTES);
 #endif
     uint64_t *counts = new_buffer(R * sizeof(*counts));
     uint64_t *sums = new_buffer(R * sizeof(*sums));
@@ -463,6 +581,7 @@ run_application(void)
     for (unsigned long i = 0; i < N; ++i)
         keys[i] = key_value(i);
     phase_end(LOC_DA_INITIALIZE);
+    for (unsigned long cycle = 0; cycle < LOC_DMA_APP_LIFECYCLES; ++cycle) {
 #if LOC_DMA_APP_BACKEND != 3
     phase_begin(LOC_DA_ALLOCATE_GRANT);
     const loc_pim_object source = new_object(N * sizeof(*keys),
@@ -472,15 +591,18 @@ run_application(void)
     phase_end(LOC_DA_ALLOCATE_GRANT);
 #endif
     phase_begin(LOC_DA_HOST_PREPARE);
-    for (unsigned long r = 0; r < R; ++r)
+    for (unsigned long r = LOC_DMA_APP_COMPLETE_LIFECYCLES ? cycle : 0;
+         r < (LOC_DMA_APP_COMPLETE_LIFECYCLES ? cycle + 1 : R); ++r)
         thresholds[r] = threshold_value(r);
     phase_end(LOC_DA_HOST_PREPARE);
 #if LOC_DMA_APP_BACKEND != 3
     upload(source, keys, N * sizeof(*keys));
 #endif
-    for (unsigned long r = 0; r < R; ++r) {
+    for (unsigned long r = LOC_DMA_APP_COMPLETE_LIFECYCLES ? cycle : 0;
+         r < (LOC_DMA_APP_COMPLETE_LIFECYCLES ? cycle + 1 : R); ++r) {
         phase_begin(LOC_DA_COMPUTE);
 #if LOC_DMA_APP_BACKEND != 3
+        unsigned char *mask = all_masks + r * LOC_DMA_APP_MASK_BYTES;
         scalar_command(M5_PIM_OP_LT_SCALAR_UINT64_BOOL, source,
             (int64_t)thresholds[r], bitmap);
         phase_end(LOC_DA_COMPUTE);
@@ -507,8 +629,18 @@ run_application(void)
         phase_end(LOC_DA_HOST_FINISH);
 #endif
     }
+#if LOC_DMA_APP_COMPLETE_LIFECYCLES
+    phase_begin(LOC_DA_FREE);
+    for (; freed_objects < object_count; ++freed_objects)
+        require(!loc_pim_free(objects[freed_objects]), 0xfa0c);
+    phase_end(LOC_DA_FREE);
+#endif
+    }
     phase_begin(LOC_DA_CHECK);
     for (unsigned long r = 0; r < R; ++r) {
+#if LOC_DMA_APP_BACKEND != 3
+        const unsigned char *mask = all_masks + r * LOC_DMA_APP_MASK_BYTES;
+#endif
         uint64_t expected_count = 0, expected_sum = 0;
         require(thresholds[r] == threshold_value(r), 0xfa20);
         for (unsigned long i = 0; i < N; ++i) {
@@ -518,17 +650,16 @@ run_application(void)
                 expected_sum += keys[i];
             }
 #if LOC_DMA_APP_BACKEND != 3
-            if (r == R - 1)
-                require(((mask[i / 8UL] >> (i % 8UL)) & 1U) ==
+            require(((mask[i / 8UL] >> (i % 8UL)) & 1U) ==
                     (keys[i] < thresholds[r]), 0xfa22);
 #endif
         }
         require(counts[r] == expected_count && sums[r] == expected_sum, 0xfa23);
-    }
 #if LOC_DMA_APP_BACKEND != 3
-    if (N % 8UL)
-        require((mask[LOC_DMA_APP_MASK_BYTES - 1] >> (N % 8UL)) == 0, 0xfa24);
+        if (N % 8UL)
+            require((mask[LOC_DMA_APP_MASK_BYTES - 1] >> (N % 8UL)) == 0, 0xfa24);
 #endif
+    }
 }
 #elif LOC_DMA_APP_KIND == 3
 static int32_t
@@ -548,12 +679,18 @@ run_application(void)
     int32_t *output = new_buffer(LOC_DMA_APP_VECTOR_BYTES);
 #endif
     int32_t *result = new_buffer(R * LOC_DMA_APP_VECTOR_BYTES);
+    unsigned long width = 1;
+    for (unsigned long candidate = 2; candidate <= N / candidate; ++candidate)
+        if (N % candidate == 0)
+            width = candidate;
+    const unsigned long height = N / width;
     phase_end(LOC_DA_HOST_ALLOCATE);
     phase_begin(LOC_DA_INITIALIZE);
     initialize_buffers();
     for (unsigned long i = 0; i < 4UL * N; ++i)
         image[i] = pixel(i);
     phase_end(LOC_DA_INITIALIZE);
+    for (unsigned long cycle = 0; cycle < LOC_DMA_APP_LIFECYCLES; ++cycle) {
 #if LOC_DMA_APP_BACKEND != 3
     phase_begin(LOC_DA_ALLOCATE_GRANT);
     loc_pim_object input[4];
@@ -567,17 +704,14 @@ run_application(void)
 #if LOC_DMA_APP_BACKEND != 3
     phase_begin(LOC_DA_HOST_PREPARE);
 #endif
-    unsigned long width = 8;
-    while (N % width)
-        --width;
-    const unsigned long height = N / width;
 #if LOC_DMA_APP_BACKEND != 3
     loc_host_pool_pack(image, packed, width, height);
     phase_end(LOC_DA_HOST_PREPARE);
     for (unsigned long i = 0; i < 4; ++i)
         upload(input[i], packed[i], LOC_DMA_APP_VECTOR_BYTES);
 #endif
-    for (unsigned long r = 0; r < R; ++r) {
+    for (unsigned long r = LOC_DMA_APP_COMPLETE_LIFECYCLES ? cycle : 0;
+         r < (LOC_DMA_APP_COMPLETE_LIFECYCLES ? cycle + 1 : R); ++r) {
         phase_begin(LOC_DA_COMPUTE);
 #if LOC_DMA_APP_BACKEND == 3
         for (unsigned long row = 0; row < height; ++row) {
@@ -600,6 +734,13 @@ run_application(void)
         phase_begin(LOC_DA_HOST_FINISH);
         loc_host_pool_reconstruct(output, result + r * N, N);
         phase_end(LOC_DA_HOST_FINISH);
+#endif
+    }
+#if LOC_DMA_APP_COMPLETE_LIFECYCLES
+    phase_begin(LOC_DA_FREE);
+    for (; freed_objects < object_count; ++freed_objects)
+        require(!loc_pim_free(objects[freed_objects]), 0xfa0c);
+    phase_end(LOC_DA_FREE);
 #endif
     }
     phase_begin(LOC_DA_CHECK);
@@ -809,6 +950,7 @@ run_application(void)
         image[i] = downsample_pixel(i, width);
     phase_end(LOC_DA_INITIALIZE);
 
+    for (unsigned long cycle = 0; cycle < LOC_DMA_APP_LIFECYCLES; ++cycle) {
     phase_begin(LOC_DA_ALLOCATE_GRANT);
     loc_pim_object input[4];
     for (unsigned long i = 0; i < 4; ++i)
@@ -823,7 +965,8 @@ run_application(void)
     for (unsigned long i = 0; i < 4; ++i)
         upload(input[i], packed[i], N);
 
-    for (unsigned long r = 0; r < R; ++r) {
+    for (unsigned long r = LOC_DMA_APP_COMPLETE_LIFECYCLES ? cycle : 0;
+         r < (LOC_DMA_APP_COMPLETE_LIFECYCLES ? cycle + 1 : R); ++r) {
         phase_begin(LOC_DA_COMPUTE);
         /* Match PIMbench's UINT8 operation order: truncate each pixel before
          * adding. Shifting the sum would implement a different rounding rule.
@@ -840,6 +983,13 @@ run_application(void)
         phase_begin(LOC_DA_HOST_FINISH);
         loc_host_downsample_reconstruct(output, result + r * N, N);
         phase_end(LOC_DA_HOST_FINISH);
+    }
+#if LOC_DMA_APP_COMPLETE_LIFECYCLES
+    phase_begin(LOC_DA_FREE);
+    for (; freed_objects < object_count; ++freed_objects)
+        require(!loc_pim_free(objects[freed_objects]), 0xfa0c);
+    phase_end(LOC_DA_FREE);
+#endif
     }
 
     phase_begin(LOC_DA_CHECK);

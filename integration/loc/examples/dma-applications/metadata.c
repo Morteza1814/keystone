@@ -20,9 +20,41 @@ main(void)
 #else
     printf("{");
 #endif
-#if LOC_DMA_APP_KIND == 9
+#if (LOC_DMA_APP_KIND >= 9 && LOC_DMA_APP_KIND <= 12) || \
+    LOC_DMA_APP_KIND == 1 || LOC_DMA_APP_KIND == 2 || \
+    LOC_DMA_APP_KIND == 3 || LOC_DMA_APP_KIND == 5
     printf("\"complete_pim_lifecycles\":%d,\"pim_lifecycles\":%lu,",
         LOC_DMA_APP_COMPLETE_LIFECYCLES, (unsigned long)LOC_DMA_APP_LIFECYCLES);
+#endif
+#if LOC_DMA_APP_KIND == 3 || LOC_DMA_APP_KIND == 5
+    unsigned long width = 1;
+    for (unsigned long candidate = 2; candidate <= LOC_DMA_APP_ELEMENTS / candidate; ++candidate)
+        if (LOC_DMA_APP_ELEMENTS % candidate == 0) width = candidate;
+    printf("\"image_output_width\":%lu,\"image_output_height\":%lu,"
+        "\"image_input_elements\":%lu,\"image_element_bytes\":%lu,"
+        "\"input_layout\":\"single_channel_row_major\","
+        "\"packing_timing_scope\":\"host_prepare_inside_application\",",
+        width, (unsigned long)LOC_DMA_APP_ELEMENTS / width,
+        4UL * LOC_DMA_APP_ELEMENTS, (unsigned long)LOC_DMA_APP_ELEMENT_BYTES);
+#endif
+#if LOC_DMA_APP_KIND == 1 || LOC_DMA_APP_KIND == 2
+    printf("\"request_policy\":\"%s\",",
+        LOC_DMA_APP_COMPLETE_LIFECYCLES ? "fixed_request_per_lifecycle" : "vary_by_round");
+#if LOC_DMA_APP_KIND == 1
+    printf("\"knn_dimensions\":2,\"knn_k\":5,\"knn_distance\":\"manhattan\","
+        "\"input_layout\":\"array_of_points_x_y_label\","
+        "\"host_packing\":\"two_feature_vectors\","
+        "\"distance_bound\":294,");
+#else
+    printf("\"key_bits\":64,\"result_layout\":\"packed_lsb_first_bitmap\","
+        "\"sum_semantics\":\"modulo_2_64\",");
+#endif
+#endif
+#if LOC_DMA_APP_KIND == 12
+    printf("\"brightness_offset\":%ld,", LOC_DMA_APP_BRIGHTNESS_OFFSET);
+#endif
+#if LOC_DMA_APP_KIND == 10
+    printf("\"axpy_scalar\":%ld,", LOC_DMA_APP_AXPY_SCALAR);
 #endif
 #if LOC_DMA_APP_KIND == 8
     printf("\"lora_lifecycle_warmup_rounds\":%lu,\"lora_lifecycles\":%lu,",
@@ -91,6 +123,12 @@ main(void)
     printf("},\"operation_counts\":{");
 #if LOC_DMA_APP_KIND == 9
     printf("\"addInt32\":%lu", (unsigned long)LOC_DMA_APP_ROUNDS);
+#elif LOC_DMA_APP_KIND == 11
+    printf("\"reluInt32\":%lu", (unsigned long)LOC_DMA_APP_ROUNDS);
+#elif LOC_DMA_APP_KIND == 12
+    printf("\"addScalarInt16\":%lu,\"minScalarInt16\":%lu,\"maxScalarInt16\":%lu",
+        (unsigned long)LOC_DMA_APP_ROUNDS, (unsigned long)LOC_DMA_APP_ROUNDS,
+        (unsigned long)LOC_DMA_APP_ROUNDS);
 #elif LOC_DMA_APP_KIND == 1
     printf("\"addInt32\":%lu,\"subScalarInt32\":%lu,\"absInt32\":%lu",
         (unsigned long)LOC_DMA_APP_ROUNDS,
