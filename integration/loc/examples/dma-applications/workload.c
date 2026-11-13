@@ -807,7 +807,7 @@ run_application(void)
     int32_t *best = new_buffer(LOC_DMA_APP_VECTOR_BYTES);
 #endif
     uint32_t *assignment = new_buffer(N * sizeof(*assignment));
-    int32_t *history = new_buffer(R * 6UL * sizeof(*history));
+    int32_t *history = new_buffer(LOC_DMA_APP_KMEANS_TOTAL_ITERATIONS * 6UL * sizeof(*history));
     uint32_t *reference_assignment = new_buffer(N * sizeof(*reference_assignment));
     int32_t centroids[3][2];
     phase_end(LOC_DA_HOST_ALLOCATE);
@@ -819,6 +819,7 @@ run_application(void)
         centroids[c][1] = points[c].y;
     }
     phase_end(LOC_DA_INITIALIZE);
+for (unsigned long cycle = 0; cycle < LOC_DMA_APP_LIFECYCLES; ++cycle) {
 #if LOC_DMA_APP_BACKEND != 3
     phase_begin(LOC_DA_ALLOCATE_GRANT);
     const loc_pim_object px = new_object(LOC_DMA_APP_VECTOR_BYTES,
@@ -831,12 +832,18 @@ run_application(void)
         WORKSPACE_PERMISSIONS);
     phase_end(LOC_DA_ALLOCATE_GRANT);
 #endif
+    /* Reset the same initial centroids for every independent request. */
+    for (unsigned long c = 0; c < 3; ++c) {
+        centroids[c][0] = points[c].x;
+        centroids[c][1] = points[c].y;
+    }
     pack_points(points, x, y);
 #if LOC_DMA_APP_BACKEND != 3
     upload(px, x, LOC_DMA_APP_VECTOR_BYTES);
     upload(py, y, LOC_DMA_APP_VECTOR_BYTES);
 #endif
-    for (unsigned long r = 0; r < R; ++r) {
+    for (unsigned long iteration = 0; iteration < LOC_DMA_APP_KMEANS_ITERATIONS; ++iteration) {
+        const unsigned long r = cycle * LOC_DMA_APP_KMEANS_ITERATIONS + iteration;
 #if LOC_DMA_APP_BACKEND == 3
         phase_begin(LOC_DA_COMPUTE);
         int64_t sums[3][2] = {{0, 0}, {0, 0}, {0, 0}};
@@ -886,6 +893,13 @@ run_application(void)
         phase_end(LOC_DA_HOST_FINISH);
 #endif
     }
+#if LOC_DMA_APP_COMPLETE_LIFECYCLES
+    phase_begin(LOC_DA_FREE);
+    for (; freed_objects < object_count; ++freed_objects)
+        require(!loc_pim_free(objects[freed_objects]), 0xfa0c);
+    phase_end(LOC_DA_FREE);
+#endif
+    }
     phase_begin(LOC_DA_CHECK);
     if (!LOC_DMA_APP_VERIFY_RESULTS) return;
     check_points(points, x, y);
@@ -894,7 +908,12 @@ run_application(void)
         reference[c][0] = points[c].x;
         reference[c][1] = points[c].y;
     }
-    for (unsigned long r = 0; r < R; ++r) {
+    for (unsigned long r = 0; r < LOC_DMA_APP_KMEANS_TOTAL_ITERATIONS; ++r) {
+        if (r % LOC_DMA_APP_KMEANS_ITERATIONS == 0)
+            for (unsigned long c = 0; c < 3; ++c) {
+                reference[c][0] = points[c].x;
+                reference[c][1] = points[c].y;
+            }
         /* Independent point-major CPU Lloyd iteration. Distances use int64
          * intermediates and no downloaded PIM values. */
         for (unsigned long i = 0; i < N; ++i) {
@@ -1101,6 +1120,7 @@ run_application(void)
     }
     phase_end(LOC_DA_INITIALIZE);
 
+    for (unsigned long cycle = 0; cycle < LOC_DMA_APP_LIFECYCLES; ++cycle) {
     phase_begin(LOC_DA_ALLOCATE_GRANT);
     const loc_pim_object input = new_object(COLUMN_BYTES,
         LOC_PIM_INPUT_PERMISSIONS);
@@ -1112,7 +1132,8 @@ run_application(void)
     loc_host_gemm_pack(a, b, a_columns, b_columns, D);
     phase_end(LOC_DA_HOST_PREPARE);
 
-    for (unsigned long r = 0; r < R; ++r) {
+    for (unsigned long r = LOC_DMA_APP_COMPLETE_LIFECYCLES ? cycle : 0;
+         r < (LOC_DMA_APP_COMPLETE_LIFECYCLES ? cycle + 1 : R); ++r) {
         for (unsigned long col = 0; col < D; ++col) {
             /* Two objects and their capabilities remain allocated throughout
              * the application. A columns are streamed as in PIMbench GEMM;
@@ -1132,6 +1153,13 @@ run_application(void)
         phase_end(LOC_DA_HOST_FINISH);
     }
 
+#if LOC_DMA_APP_COMPLETE_LIFECYCLES
+    phase_begin(LOC_DA_FREE);
+    for (; freed_objects < object_count; ++freed_objects)
+        require(!loc_pim_free(objects[freed_objects]), 0xfa0c);
+    phase_end(LOC_DA_FREE);
+#endif
+    }
     phase_begin(LOC_DA_CHECK);
     if (!LOC_DMA_APP_VERIFY_RESULTS) return;
     for (unsigned long row = 0; row < D; ++row) {
@@ -1169,6 +1197,7 @@ gemv_matrix_value(unsigned long row, unsigned long col)
 static int32_t
 gemv_vector_value(unsigned long round, unsigned long col)
 {
+    if (LOC_DMA_APP_REPEATED_LIFECYCLES) round = 0;
     return (int32_t)((round * 13UL + col * 5UL +
         (round * col) % 11UL + (col >> 3) * 3UL) % 17UL) - 8;
 }
@@ -1183,7 +1212,9 @@ run_application(void)
 #endif
     int32_t *vectors = new_buffer(4UL * R * K);
     int32_t *zero = new_buffer(LOC_DMA_APP_VECTOR_BYTES);
+#if LOC_DMA_APP_KIND == 8 || !LOC_DMA_APP_COMPLETE_LIFECYCLES
     int32_t *output = new_buffer(LOC_DMA_APP_VECTOR_BYTES);
+#endif
     int32_t *result = new_buffer(R * LOC_DMA_APP_VECTOR_BYTES);
 #if LOC_DMA_APP_KIND == 8
     int32_t *a = new_buffer(4UL * LOC_DMA_APP_LORA_RANK * K);
@@ -1223,7 +1254,7 @@ run_application(void)
 #endif
     phase_end(LOC_DA_INITIALIZE);
 
-    for (unsigned long cycle = 0; cycle < LOC_DMA_APP_LORA_LIFECYCLES; ++cycle) {
+    for (unsigned long cycle = 0; cycle < LOC_DMA_APP_LIFECYCLES; ++cycle) {
     phase_begin(LOC_DA_ALLOCATE_GRANT);
 #if LOC_DMA_APP_LORA_PLACED
     const loc_pim_object weights = record_object(loc_pim_alloc_placed(N, K, 0),
@@ -1253,7 +1284,11 @@ run_application(void)
         loc_host_gemv_pack_columns(matrix, columns, N, K, first, count);
         phase_end(LOC_DA_HOST_PREPARE);
 #endif
+#if LOC_DMA_APP_CACHE_RANGE_MARKERS
+        m5_work_begin(LOC_DA_UPLOAD, (unsigned long)(matrix + first * N));
+#else
         phase_begin(LOC_DA_UPLOAD);
+#endif
         const unsigned long bytes = count * LOC_DMA_APP_VECTOR_BYTES;
         require(!loc_pim_upload_at(weights, first * LOC_DMA_APP_VECTOR_BYTES,
 #if LOC_DMA_APP_LORA_PLACED
@@ -1271,8 +1306,8 @@ run_application(void)
     loc_host_gemv_pack(matrix, columns, N, K);
     phase_end(LOC_DA_HOST_PREPARE);
 #endif
-    for (unsigned long r = LOC_DMA_APP_LORA_LIFECYCLE_WARMUP_ROUNDS ? cycle : 0;
-         r < (LOC_DMA_APP_LORA_LIFECYCLE_WARMUP_ROUNDS ? cycle + 1 : R); ++r) {
+    for (unsigned long r = LOC_DMA_APP_REPEATED_LIFECYCLES ? cycle : 0;
+         r < (LOC_DMA_APP_REPEATED_LIFECYCLES ? cycle + 1 : R); ++r) {
         upload(accumulator, zero, LOC_DMA_APP_VECTOR_BYTES);
 #if LOC_DMA_APP_LORA_RESIDENT
         require(!loc_command_gemv(weights, accumulator, vectors + r * K,
@@ -1286,7 +1321,11 @@ run_application(void)
             phase_end(LOC_DA_COMPUTE);
         }
 #endif
+#if LOC_DMA_APP_KIND == 7 && LOC_DMA_APP_COMPLETE_LIFECYCLES
+        download(result + r * N, accumulator, LOC_DMA_APP_VECTOR_BYTES);
+#else
         download(output, accumulator, LOC_DMA_APP_VECTOR_BYTES);
+#endif
 #if LOC_DMA_APP_KIND == 8
         phase_begin(LOC_DA_HOST_LORA);
         require(loc_host_lora_adapter(a, b, vectors + r * K,
@@ -1296,14 +1335,16 @@ run_application(void)
         phase_begin(LOC_DA_HOST_FINISH);
         require(loc_host_lora_combine(output, correction + r * N, bias,
             result + r * N, N, LOC_DMA_APP_LORA_SCALE), 0xfa91);
-#else
+#elif !LOC_DMA_APP_COMPLETE_LIFECYCLES
         phase_begin(LOC_DA_HOST_FINISH);
         loc_host_gemv_store_result(output, result + r * N, N);
 #endif
+#if LOC_DMA_APP_KIND == 8 || !LOC_DMA_APP_COMPLETE_LIFECYCLES
         phase_end(LOC_DA_HOST_FINISH);
+#endif
     }
 
-#if LOC_DMA_APP_LORA_LIFECYCLE_WARMUP_ROUNDS
+#if LOC_DMA_APP_REPEATED_LIFECYCLES
     phase_begin(LOC_DA_FREE);
     for (; freed_objects < object_count; ++freed_objects)
         require(!loc_pim_free(objects[freed_objects]), 0xfa0c);
@@ -1353,8 +1394,10 @@ run_application(void)
                 expected += (int64_t)(LOC_DMA_APP_LORA_PLACED ?
                     gemv_matrix_value(row, col) : matrix[row * K + col]) *
                     vectors[r * K + col];
-            require(expected >= INT32_MIN && expected <= INT32_MAX &&
-                (r + 1UL != R || output[row] == expected), 0xfa85);
+            require(expected >= INT32_MIN && expected <= INT32_MAX, 0xfa85);
+#if LOC_DMA_APP_KIND == 8 || !LOC_DMA_APP_COMPLETE_LIFECYCLES
+            require(r + 1UL != R || output[row] == expected, 0xfa85);
+#endif
 #if LOC_DMA_APP_KIND == 8
             /* Independent reference recomputes each rank component directly
              * from row-major A/B; it does not trust ax or correction. */

@@ -27,7 +27,8 @@ main(void)
         LOC_DMA_APP_PREFILL_BUFFERS ? "true" : "false");
 #if (LOC_DMA_APP_KIND >= 9 && LOC_DMA_APP_KIND <= 12) || \
     LOC_DMA_APP_KIND == 1 || LOC_DMA_APP_KIND == 2 || \
-    LOC_DMA_APP_KIND == 3 || LOC_DMA_APP_KIND == 5
+    LOC_DMA_APP_KIND == 3 || LOC_DMA_APP_KIND == 4 || LOC_DMA_APP_KIND == 5 || \
+    LOC_DMA_APP_KIND == 6 || LOC_DMA_APP_KIND == 7
     printf("\"complete_pim_lifecycles\":%d,\"pim_lifecycles\":%lu,",
         LOC_DMA_APP_COMPLETE_LIFECYCLES, (unsigned long)LOC_DMA_APP_LIFECYCLES);
 #endif
@@ -61,6 +62,14 @@ main(void)
     printf("\"key_bits\":64,\"result_layout\":\"packed_lsb_first_bitmap\","
         "\"sum_semantics\":\"modulo_2_64\",");
 #endif
+#endif
+#if LOC_DMA_APP_KIND == 4
+    printf("\"kmeans_iterations_per_request\":%lu,\"kmeans_total_iterations\":%lu,",
+        (unsigned long)LOC_DMA_APP_KMEANS_ITERATIONS,
+        (unsigned long)LOC_DMA_APP_KMEANS_TOTAL_ITERATIONS);
+#endif
+#if LOC_DMA_APP_KIND == 7
+    printf("\"direct_result_download\":%s,", LOC_DMA_APP_COMPLETE_LIFECYCLES ? "true" : "false");
 #endif
 #if LOC_DMA_APP_KIND == 12
     printf("\"brightness_offset\":%ld,", LOC_DMA_APP_BRIGHTNESS_OFFSET);
@@ -151,8 +160,8 @@ main(void)
     printf("\"maxInt32\":%lu", 3UL * LOC_DMA_APP_ROUNDS);
 #elif LOC_DMA_APP_KIND == 4
     printf("\"addInt32\":%lu,\"subScalarInt32\":%lu,\"mulInt32\":%lu",
-        3UL * LOC_DMA_APP_ROUNDS, 6UL * LOC_DMA_APP_ROUNDS,
-        6UL * LOC_DMA_APP_ROUNDS);
+        3UL * LOC_DMA_APP_KMEANS_TOTAL_ITERATIONS, 6UL * LOC_DMA_APP_KMEANS_TOTAL_ITERATIONS,
+        6UL * LOC_DMA_APP_KMEANS_TOTAL_ITERATIONS);
 #elif LOC_DMA_APP_KIND == 5
     printf("\"addUint8\":%lu,\"shiftBitsRightUint8\":%lu",
         3UL * LOC_DMA_APP_ROUNDS, 4UL * LOC_DMA_APP_ROUNDS);
