@@ -2,6 +2,23 @@
 #ifndef KEYSTONE_DMA_APPLICATION_METADATA_H
 #define KEYSTONE_DMA_APPLICATION_METADATA_H
 
+/* Native/regression builds check by default. Performance builders explicitly
+ * select timing-only mode; protection and command-status checks stay enabled. */
+#ifndef LOC_DMA_APP_VERIFY_RESULTS
+#define LOC_DMA_APP_VERIFY_RESULTS 1
+#endif
+#if LOC_DMA_APP_VERIFY_RESULTS != 0 && LOC_DMA_APP_VERIFY_RESULTS != 1
+#error "LOC_DMA_APP_VERIFY_RESULTS must be 0 or 1"
+#endif
+/* Debug poisoning/guard initialization is unnecessary for timing-only guests.
+ * Keep an override so native tests can verify results with poisoning absent. */
+#ifndef LOC_DMA_APP_PREFILL_BUFFERS
+#define LOC_DMA_APP_PREFILL_BUFFERS LOC_DMA_APP_VERIFY_RESULTS
+#endif
+#if LOC_DMA_APP_PREFILL_BUFFERS != 0 && LOC_DMA_APP_PREFILL_BUFFERS != 1
+#error "LOC_DMA_APP_PREFILL_BUFFERS must be 0 or 1"
+#endif
+
 #ifndef LOC_DMA_APP_BACKEND
 #define LOC_DMA_APP_BACKEND 1
 #endif
@@ -10,6 +27,17 @@
 #endif
 #ifndef LOC_DMA_APP_ELEMENTS
 #define LOC_DMA_APP_ELEMENTS 128UL
+#endif
+/* Input layout conversion is optional and explicit; intermediate conversion
+ * still belongs to the measured application when required. */
+#ifndef LOC_DMA_APP_PREPACKED_INPUTS
+#define LOC_DMA_APP_PREPACKED_INPUTS 0
+#endif
+#if LOC_DMA_APP_PREPACKED_INPUTS != 0 && LOC_DMA_APP_PREPACKED_INPUTS != 1
+#error "PREPACKED_INPUTS must be 0 or 1"
+#endif
+#if LOC_DMA_APP_PREPACKED_INPUTS && (LOC_DMA_APP_BACKEND == 3 ||     (LOC_DMA_APP_KIND != 3 && LOC_DMA_APP_KIND != 5))
+#error "Prepacked inputs require a pooling/downsampling PIM backend"
 #endif
 #ifndef LOC_DMA_APP_ROUNDS
 #if (LOC_DMA_APP_KIND == 7 || LOC_DMA_APP_KIND == 8)
@@ -56,6 +84,8 @@
 #endif
 #define LOC_DMA_APP_PACK_COLUMNS 16UL
 #if LOC_DMA_APP_KIND >= 9 && LOC_DMA_APP_KIND <= 12
+#define LOC_DMA_APP_PREPARE_PHASES 0UL
+#elif LOC_DMA_APP_PREPACKED_INPUTS
 #define LOC_DMA_APP_PREPARE_PHASES 0UL
 #elif LOC_DMA_APP_KIND == 1 || LOC_DMA_APP_KIND == 2 || \
       LOC_DMA_APP_KIND == 3 || LOC_DMA_APP_KIND == 5
@@ -171,8 +201,10 @@
     (((LOC_DMA_APP_VECTOR_BYTES + LOC_DMA_APP_ROUNDS * LOC_DMA_APP_MASK_BYTES + \
         24UL * LOC_DMA_APP_ROUNDS + 65536UL) + 4095UL) / 4096UL * 4096UL)
 #elif LOC_DMA_APP_KIND == 3 || LOC_DMA_APP_KIND == 5
+#define LOC_DMA_APP_IMAGE_WORKSPACE_VECTORS \
+    (LOC_DMA_APP_PREPACKED_INPUTS ? 4UL : 8UL)
 #define LOC_DMA_APP_PRIVATE_BYTES \
-    ((((9UL + LOC_DMA_APP_ROUNDS) * LOC_DMA_APP_VECTOR_BYTES + 65536UL) + \
+    ((((LOC_DMA_APP_IMAGE_WORKSPACE_VECTORS + LOC_DMA_APP_ROUNDS) * LOC_DMA_APP_VECTOR_BYTES + 65536UL) + \
         4095UL) / 4096UL * 4096UL)
 #elif LOC_DMA_APP_KIND == 6
 #define LOC_DMA_APP_PRIVATE_BYTES \
@@ -272,7 +304,7 @@
 #define LOC_DMA_APP_DOWNLOAD_BYTES \
     (LOC_DMA_APP_ROUNDS * LOC_DMA_APP_VECTOR_BYTES)
 #define LOC_DMA_APP_COMPUTE_PHASES LOC_DMA_APP_ROUNDS
-#define LOC_DMA_APP_HOST_FINISH_PHASES LOC_DMA_APP_ROUNDS
+#define LOC_DMA_APP_HOST_FINISH_PHASES 0UL
 #elif LOC_DMA_APP_KIND == 4
 #define LOC_DMA_APP_NAME "kmeans"
 #define LOC_DMA_APP_ARITHMETIC "bounded_int32_squared_l2_integer_centroids_truncate_toward_zero"
@@ -298,7 +330,7 @@
 #define LOC_DMA_APP_DOWNLOAD_BYTES \
     (LOC_DMA_APP_ROUNDS * LOC_DMA_APP_ELEMENTS)
 #define LOC_DMA_APP_COMPUTE_PHASES LOC_DMA_APP_ROUNDS
-#define LOC_DMA_APP_HOST_FINISH_PHASES LOC_DMA_APP_ROUNDS
+#define LOC_DMA_APP_HOST_FINISH_PHASES 0UL
 #elif LOC_DMA_APP_KIND == 6
 #define LOC_DMA_APP_NAME "gemm"
 #define LOC_DMA_APP_ARITHMETIC "bounded_int32_square_gemm_alpha1_beta0_column_axpy"

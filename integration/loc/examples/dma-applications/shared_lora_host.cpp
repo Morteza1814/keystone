@@ -110,9 +110,9 @@ int main(int argc,char **argv) {
 #endif
     step(1,SH_RELEASE); step(1,SH_STOP); destroy(1);
     step(0,SH_RELEASE); step(0,SH_STOP); destroy(0);
-    std::printf("SHARED_LORA_PASS elements=%lu rank=8 tenants=2 projections=2 weight_uploads=%lu objects=%u grants=4 immutable_grants=1 sequential=1 independent_int64=1 mode=%s\n",
+    std::printf("SHARED_LORA_PASS elements=%lu rank=8 tenants=2 projections=2 weight_uploads=%lu objects=%u grants=4 immutable_grants=1 sequential=1 independent_int64=%d mode=%s\n",
         (unsigned long)SHARED_N,(unsigned long)((SHARED_N+15)/16)*(SHARED_DUPLICATED?2:1),
-        SHARED_DUPLICATED?4:3, SHARED_DUPLICATED?"duplicated":"shared");
+        SHARED_DUPLICATED?4:3, LOC_DMA_APP_VERIFY_RESULTS, SHARED_DUPLICATED?"duplicated":"shared");
 #else
     step(1,SH_BEFORE_GRANT,0,owner.weights);
     step(0,SH_GRANT,p1);
@@ -128,8 +128,8 @@ int main(int argc,char **argv) {
     step(0,SH_PROJECT,0,0,0,2);
     auto final=step(0,SH_RELEASE);
     step(0,SH_STOP); destroy(0);
-    std::printf("SHARED_LORA_PASS elements=%lu rank=8 tenants=2 projections=3 weight_uploads=%lu objects=3 grants=4 selective_revocations=1 owner_checks=%lu immutable_grants=1 sequential=1 independent_int64=1\n",
-        (unsigned long)SHARED_N,(unsigned long)(SHARED_N+15)/16,final.checks);
+    std::printf("SHARED_LORA_PASS elements=%lu rank=8 tenants=2 projections=3 weight_uploads=%lu objects=3 grants=4 selective_revocations=1 owner_checks=%lu immutable_grants=1 sequential=1 independent_int64=%d\n",
+        (unsigned long)SHARED_N,(unsigned long)(SHARED_N+15)/16,final.checks,LOC_DMA_APP_VERIFY_RESULTS);
 #endif
     std::fflush(nullptr); std::_Exit(0);
 }

@@ -20,6 +20,11 @@ main(void)
 #else
     printf("{");
 #endif
+    printf("\"numeric_result_checked\":%s,\"verification_policy\":\"%s\",",
+        LOC_DMA_APP_VERIFY_RESULTS ? "true" : "false",
+        LOC_DMA_APP_VERIFY_RESULTS ? "independent_guest_reference" : "timing_only");
+    printf("\"host_buffer_prefill\":%s,",
+        LOC_DMA_APP_PREFILL_BUFFERS ? "true" : "false");
 #if (LOC_DMA_APP_KIND >= 9 && LOC_DMA_APP_KIND <= 12) || \
     LOC_DMA_APP_KIND == 1 || LOC_DMA_APP_KIND == 2 || \
     LOC_DMA_APP_KIND == 3 || LOC_DMA_APP_KIND == 5
@@ -32,10 +37,17 @@ main(void)
         if (LOC_DMA_APP_ELEMENTS % candidate == 0) width = candidate;
     printf("\"image_output_width\":%lu,\"image_output_height\":%lu,"
         "\"image_input_elements\":%lu,\"image_element_bytes\":%lu,"
-        "\"input_layout\":\"single_channel_row_major\","
-        "\"packing_timing_scope\":\"host_prepare_inside_application\",",
+        "\"input_layout\":\"%s\",\"prepacked_inputs\":%d,"
+        "\"direct_result_download\":true,"
+        "\"packing_timing_scope\":\"%s\",",
         width, (unsigned long)LOC_DMA_APP_ELEMENTS / width,
-        4UL * LOC_DMA_APP_ELEMENTS, (unsigned long)LOC_DMA_APP_ELEMENT_BYTES);
+        4UL * LOC_DMA_APP_ELEMENTS, (unsigned long)LOC_DMA_APP_ELEMENT_BYTES,
+        LOC_DMA_APP_PREPACKED_INPUTS ? "four_packed_window_vectors" : "single_channel_row_major",
+        LOC_DMA_APP_PREPACKED_INPUTS,
+        LOC_DMA_APP_PREPACKED_INPUTS ? "initialization_outside_kernel" : "host_prepare_inside_application");
+    printf("\"image_fixture_generation\":\"%s\",\"image_raster_workspace_bytes\":%lu,",
+        LOC_DMA_APP_PREPACKED_INPUTS ? "direct_packed" : "raster_then_pack",
+        LOC_DMA_APP_PREPACKED_INPUTS ? 0UL : 4UL * LOC_DMA_APP_VECTOR_BYTES);
 #endif
 #if LOC_DMA_APP_KIND == 1 || LOC_DMA_APP_KIND == 2
     printf("\"request_policy\":\"%s\",",

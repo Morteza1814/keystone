@@ -1,6 +1,12 @@
 /* Synthetic two-enclave LoRA fixture. Shared data is control/test output only. */
 #ifndef LOC_SHARED_LORA_H
 #define LOC_SHARED_LORA_H
+#ifndef LOC_DMA_APP_VERIFY_RESULTS
+#define LOC_DMA_APP_VERIFY_RESULTS 1
+#endif
+#if LOC_DMA_APP_VERIFY_RESULTS != 0 && LOC_DMA_APP_VERIFY_RESULTS != 1
+#error "LOC_DMA_APP_VERIFY_RESULTS must be 0 or 1"
+#endif
 #include <stdint.h>
 #include <limits.h>
 #include <gem5/m5ops.h>

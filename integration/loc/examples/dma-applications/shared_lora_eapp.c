@@ -87,6 +87,7 @@ static void project(unsigned long round) {
     need(loc_host_lora_combine(output,correction,bias,reply.output,SHARED_N,1),0xfb25);
     sh_end(SH_COMBINE);
     sh_begin(SH_CHECK);
+    if (LOC_DMA_APP_VERIFY_RESULTS) {
     int64_t ref_ax[SHARED_RANK];
     for (unsigned long i=0;i<SHARED_RANK;++i) {
         int64_t sum=0;
@@ -101,6 +102,7 @@ static void project(unsigned long round) {
         need(base==output[row] && delta==correction[row] && expected>=INT32_MIN && expected<=INT32_MAX && expected==reply.output[row],0xfb27);
     }
     for (unsigned long i=0;i<64;++i) need(((volatile unsigned char *)arena)[i]==0xd3 && ((volatile unsigned char *)(arena+arena_bytes-64))[i]==0xd3,0xfb28);
+    }
     sh_end(SH_CHECK); reply.round=round;
 }
 static void denial_tests(const struct shared_command *c) {

@@ -52,6 +52,8 @@ new_buffer(unsigned long bytes)
 static void
 initialize_buffers(void)
 {
+    if (!LOC_DMA_APP_PREFILL_BUFFERS)
+        return;
     for (unsigned long b = 0; b < buffer_count; ++b) {
         volatile unsigned char *data = buffers[b].data;
         for (unsigned long i = 0; i < GUARD_BYTES; ++i) {
@@ -76,11 +78,13 @@ initialize_buffers(void)
 static void
 check_buffers(void)
 {
-    for (unsigned long b = 0; b < buffer_count; ++b) {
-        const volatile unsigned char *data = buffers[b].data;
-        for (unsigned long i = 0; i < GUARD_BYTES; ++i)
-            require(data[(long)i - (long)GUARD_BYTES] == 0xd3 &&
-                data[buffers[b].bytes + i] == 0xd3, 0xfa03);
+    if (LOC_DMA_APP_VERIFY_RESULTS && LOC_DMA_APP_PREFILL_BUFFERS) {
+        for (unsigned long b = 0; b < buffer_count; ++b) {
+            const volatile unsigned char *data = buffers[b].data;
+            for (unsigned long i = 0; i < GUARD_BYTES; ++i)
+                require(data[(long)i - (long)GUARD_BYTES] == 0xd3 &&
+                    data[buffers[b].bytes + i] == 0xd3, 0xfa03);
+        }
     }
     require(object_count == LOC_DMA_APP_OBJECTS &&
         grants == LOC_DMA_APP_GRANTS && uploads == LOC_DMA_APP_UPLOADS &&
@@ -91,6 +95,7 @@ check_buffers(void)
     /* Fixture-wide handle uniqueness is a correctness check, not allocation
      * work. Keep it outside measured sequences so later samples do not scan
      * increasingly long histories of objects that have already been freed. */
+    if (LOC_DMA_APP_VERIFY_RESULTS)
     for (unsigned long i = 0; i < object_count; ++i)
         for (unsigned long j = 0; j < i; ++j)
             require(objects[i] != objects[j], 0xfa07);
@@ -233,6 +238,7 @@ run_application(void)
 #endif
     }
     phase_begin(LOC_DA_CHECK);
+    if (!LOC_DMA_APP_VERIFY_RESULTS) return;
     for (unsigned long i = 0; i < N; ++i) {
 #if LOC_DMA_APP_KIND == 10
         const int64_t product = (int64_t)LOC_DMA_APP_AXPY_SCALAR * vecadd_a(i);
@@ -315,6 +321,7 @@ run_application(void)
 #endif
     }
     phase_begin(LOC_DA_CHECK);
+    if (!LOC_DMA_APP_VERIFY_RESULTS) return;
     for (unsigned long i = 0; i < N; ++i) {
         int64_t expected = unary_input(i);
 #if LOC_DMA_APP_KIND == 12
@@ -500,6 +507,7 @@ run_application(void)
 #endif
     }
     phase_begin(LOC_DA_CHECK);
+    if (!LOC_DMA_APP_VERIFY_RESULTS) return;
     check_points(points, x, y);
     for (unsigned long r = 0; r < R; ++r) {
 #if LOC_DMA_APP_BACKEND != 3
@@ -637,6 +645,7 @@ run_application(void)
 #endif
     }
     phase_begin(LOC_DA_CHECK);
+    if (!LOC_DMA_APP_VERIFY_RESULTS) return;
     for (unsigned long r = 0; r < R; ++r) {
 #if LOC_DMA_APP_BACKEND != 3
         const unsigned char *mask = all_masks + r * LOC_DMA_APP_MASK_BYTES;
@@ -671,12 +680,13 @@ pixel(unsigned long index)
 static void
 run_application(void)
 {
+#if !LOC_DMA_APP_PREPACKED_INPUTS
     int32_t *image = new_buffer(4UL * LOC_DMA_APP_VECTOR_BYTES);
+#endif
 #if LOC_DMA_APP_BACKEND != 3
     int32_t *packed[4];
     for (unsigned long i = 0; i < 4; ++i)
         packed[i] = new_buffer(LOC_DMA_APP_VECTOR_BYTES);
-    int32_t *output = new_buffer(LOC_DMA_APP_VECTOR_BYTES);
 #endif
     int32_t *result = new_buffer(R * LOC_DMA_APP_VECTOR_BYTES);
     unsigned long width = 1;
@@ -687,8 +697,22 @@ run_application(void)
     phase_end(LOC_DA_HOST_ALLOCATE);
     phase_begin(LOC_DA_INITIALIZE);
     initialize_buffers();
+#if LOC_DMA_APP_PREPACKED_INPUTS
+    /* Supply the exact same fixture directly in the kernel's input layout. */
+    for (unsigned long row = 0; row < height; ++row) {
+        for (unsigned long col = 0; col < width; ++col) {
+            const unsigned long in = 4UL * row * width + 2UL * col;
+            const unsigned long out = row * width + col;
+            packed[0][out] = pixel(in);
+            packed[1][out] = pixel(in + 1);
+            packed[2][out] = pixel(in + 2UL * width);
+            packed[3][out] = pixel(in + 2UL * width + 1);
+        }
+    }
+#else
     for (unsigned long i = 0; i < 4UL * N; ++i)
         image[i] = pixel(i);
+#endif
     phase_end(LOC_DA_INITIALIZE);
     for (unsigned long cycle = 0; cycle < LOC_DMA_APP_LIFECYCLES; ++cycle) {
 #if LOC_DMA_APP_BACKEND != 3
@@ -702,11 +726,11 @@ run_application(void)
     phase_end(LOC_DA_ALLOCATE_GRANT);
 #endif
 #if LOC_DMA_APP_BACKEND != 3
+#if !LOC_DMA_APP_PREPACKED_INPUTS
     phase_begin(LOC_DA_HOST_PREPARE);
-#endif
-#if LOC_DMA_APP_BACKEND != 3
     loc_host_pool_pack(image, packed, width, height);
     phase_end(LOC_DA_HOST_PREPARE);
+#endif
     for (unsigned long i = 0; i < 4; ++i)
         upload(input[i], packed[i], LOC_DMA_APP_VECTOR_BYTES);
 #endif
@@ -730,10 +754,7 @@ run_application(void)
         command(M5_PIM_OP_MAX_INT32, destination, input[2], destination);
         command(M5_PIM_OP_MAX_INT32, destination, input[3], destination);
         phase_end(LOC_DA_COMPUTE);
-        download(output, destination, LOC_DMA_APP_VECTOR_BYTES);
-        phase_begin(LOC_DA_HOST_FINISH);
-        loc_host_pool_reconstruct(output, result + r * N, N);
-        phase_end(LOC_DA_HOST_FINISH);
+        download(result + r * N, destination, LOC_DMA_APP_VECTOR_BYTES);
 #endif
     }
 #if LOC_DMA_APP_COMPLETE_LIFECYCLES
@@ -744,15 +765,23 @@ run_application(void)
 #endif
     }
     phase_begin(LOC_DA_CHECK);
+    if (!LOC_DMA_APP_VERIFY_RESULTS) return;
+#if !LOC_DMA_APP_PREPACKED_INPUTS
     for (unsigned long i = 0; i < 4UL * N; ++i)
         require(image[i] == pixel(i), 0xfa30);
+#endif
     for (unsigned long row = 0; row < height; ++row) {
         for (unsigned long col = 0; col < width; ++col) {
             int32_t expected = INT32_MIN;
             for (unsigned long y = 0; y < 2; ++y) {
                 for (unsigned long x = 0; x < 2; ++x) {
+#if LOC_DMA_APP_PREPACKED_INPUTS
+                    const int32_t value = pixel((2UL * row + y) *
+                        (2UL * width) + 2UL * col + x);
+#else
                     const int32_t value = image[(2UL * row + y) *
                         (2UL * width) + 2UL * col + x];
+#endif
                     if (value > expected)
                         expected = value;
 #if LOC_DMA_APP_BACKEND != 3
@@ -761,11 +790,8 @@ run_application(void)
 #endif
                 }
             }
-#if LOC_DMA_APP_BACKEND != 3
-            require(output[row * width + col] == expected, 0xfa32);
-#endif
             for (unsigned long r = 0; r < R; ++r)
-                require(result[r * N + row * width + col] == expected, 0xfa33);
+                require(result[r * N + row * width + col] == expected, 0xfa32);
         }
     }
 }
@@ -861,6 +887,7 @@ run_application(void)
 #endif
     }
     phase_begin(LOC_DA_CHECK);
+    if (!LOC_DMA_APP_VERIFY_RESULTS) return;
     check_points(points, x, y);
     int32_t reference[3][2];
     for (unsigned long c = 0; c < 3; ++c) {
@@ -930,11 +957,12 @@ downsample_pixel(unsigned long index, unsigned long width)
 static void
 run_application(void)
 {
+#if !LOC_DMA_APP_PREPACKED_INPUTS
     uint8_t *image = new_buffer(4UL * N);
+#endif
     uint8_t *packed[4];
     for (unsigned long i = 0; i < 4; ++i)
         packed[i] = new_buffer(N);
-    uint8_t *output = new_buffer(N);
     uint8_t *result = new_buffer(R * N);
     /* Use the closest rectangular factorization to a square. Odd fixture
      * sizes remain valid; N=4096/65536 gives 64x64/256x256 output images. */
@@ -946,8 +974,21 @@ run_application(void)
     phase_end(LOC_DA_HOST_ALLOCATE);
     phase_begin(LOC_DA_INITIALIZE);
     initialize_buffers();
+#if LOC_DMA_APP_PREPACKED_INPUTS
+    for (unsigned long row = 0; row < height; ++row) {
+        for (unsigned long col = 0; col < width; ++col) {
+            const unsigned long in = 4UL * row * width + 2UL * col;
+            const unsigned long out = row * width + col;
+            packed[0][out] = downsample_pixel(in, width);
+            packed[1][out] = downsample_pixel(in + 1, width);
+            packed[2][out] = downsample_pixel(in + 2UL * width, width);
+            packed[3][out] = downsample_pixel(in + 2UL * width + 1, width);
+        }
+    }
+#else
     for (unsigned long i = 0; i < 4UL * N; ++i)
         image[i] = downsample_pixel(i, width);
+#endif
     phase_end(LOC_DA_INITIALIZE);
 
     for (unsigned long cycle = 0; cycle < LOC_DMA_APP_LIFECYCLES; ++cycle) {
@@ -959,9 +1000,11 @@ run_application(void)
     const loc_pim_object scratch = new_object(N, WORKSPACE_PERMISSIONS);
     phase_end(LOC_DA_ALLOCATE_GRANT);
 
+#if !LOC_DMA_APP_PREPACKED_INPUTS
     phase_begin(LOC_DA_HOST_PREPARE);
     loc_host_downsample_pack(image, packed, width, height);
     phase_end(LOC_DA_HOST_PREPARE);
+#endif
     for (unsigned long i = 0; i < 4; ++i)
         upload(input[i], packed[i], N);
 
@@ -979,10 +1022,7 @@ run_application(void)
             command(M5_PIM_OP_ADD_UINT8, destination, scratch, destination);
         }
         phase_end(LOC_DA_COMPUTE);
-        download(output, destination, N);
-        phase_begin(LOC_DA_HOST_FINISH);
-        loc_host_downsample_reconstruct(output, result + r * N, N);
-        phase_end(LOC_DA_HOST_FINISH);
+        download(result + r * N, destination, N);
     }
 #if LOC_DMA_APP_COMPLETE_LIFECYCLES
     phase_begin(LOC_DA_FREE);
@@ -993,8 +1033,11 @@ run_application(void)
     }
 
     phase_begin(LOC_DA_CHECK);
+    if (!LOC_DMA_APP_VERIFY_RESULTS) return;
+#if !LOC_DMA_APP_PREPACKED_INPUTS
     for (unsigned long i = 0; i < 4UL * N; ++i)
         require(image[i] == downsample_pixel(i, width), 0xfa60);
+#endif
     for (unsigned long row = 0; row < height; ++row) {
         for (unsigned long col = 0; col < width; ++col) {
             unsigned expected = 0;
@@ -1002,18 +1045,23 @@ run_application(void)
              * a wider sum, without trusting downloaded or packed operands. */
             for (unsigned long y = 0; y < 2; ++y) {
                 for (unsigned long x = 0; x < 2; ++x) {
+#if LOC_DMA_APP_PREPACKED_INPUTS
+                    const uint8_t value = downsample_pixel((2UL * row + y) *
+                        (2UL * width) + 2UL * col + x, width);
+#else
                     const uint8_t value = image[(2UL * row + y) *
                         (2UL * width) + 2UL * col + x];
+#endif
                     expected += (unsigned)value / 4U;
                     require(packed[y * 2UL + x][row * width + col] == value,
                         0xfa61);
                 }
             }
-            require(expected <= 252 && output[row * width + col] == expected,
+            require(expected <= 252,
                 0xfa62);
             for (unsigned long r = 0; r < R; ++r)
                 require(result[r * N + row * width + col] == expected,
-                    0xfa63);
+                    0xfa62);
         }
     }
 }
@@ -1085,6 +1133,7 @@ run_application(void)
     }
 
     phase_begin(LOC_DA_CHECK);
+    if (!LOC_DMA_APP_VERIFY_RESULTS) return;
     for (unsigned long row = 0; row < D; ++row) {
         require(zero[row] == 0, 0xfa70);
         for (unsigned long col = 0; col < D; ++col) {
@@ -1263,6 +1312,7 @@ run_application(void)
     } /* complete PIM lifecycle; all outputs checked after final release */
 
     phase_begin(LOC_DA_CHECK);
+    if (!LOC_DMA_APP_VERIFY_RESULTS) return;
 #if LOC_DMA_APP_KIND == 8
     int64_t reference_ax[R * LOC_DMA_APP_LORA_RANK];
     for (unsigned long r = 0; r < R; ++r)

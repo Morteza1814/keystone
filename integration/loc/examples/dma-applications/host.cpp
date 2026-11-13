@@ -48,19 +48,19 @@ main(int argc, char **argv)
     if (value != LOC_DMA_APP_PASS)
         std::fprintf(stderr, "KEYSTONE_DMA_APPLICATION_APP_ERROR code=%#lx\n",
             value);
-    require(value == LOC_DMA_APP_PASS, "numerical_result");
+    require(value == LOC_DMA_APP_PASS, "application_status");
 
     phase_begin(LOC_DA_DESTROY);
     require(enclave->destroy() == Keystone::Error::Success, "destroy");
     phase_end(LOC_DA_DESTROY);
     std::printf("KEYSTONE_DMA_APPLICATION_HOST_PASS application=%s "
         "elements=%lu rounds=%lu uploads=%lu downloads=%lu commands=%lu "
-        "functional_payload=1 numeric_result_checked=1 "
+        "functional_payload=1 numeric_result_checked=%d "
         "compute_timing=pimeval grants_immutable=1 arithmetic=%s\n",
         LOC_DMA_APP_NAME, (unsigned long)LOC_DMA_APP_ELEMENTS,
         (unsigned long)LOC_DMA_APP_ROUNDS,
         (unsigned long)LOC_DMA_APP_UPLOADS,
         (unsigned long)LOC_DMA_APP_DOWNLOADS,
-        (unsigned long)LOC_DMA_APP_COMMANDS, LOC_DMA_APP_ARITHMETIC);
+        (unsigned long)LOC_DMA_APP_COMMANDS, LOC_DMA_APP_VERIFY_RESULTS, LOC_DMA_APP_ARITHMETIC);
     finish(0);
 }

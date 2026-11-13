@@ -70,14 +70,14 @@ main(void)
     run_workload();
     printf("LINUX_DMA_APPLICATION_HOST_PASS backend=%s application=%s "
         "elements=%lu rounds=%lu uploads=%lu downloads=%lu commands=%lu "
-        "functional_payload=1 numeric_result_checked=1 "
+        "functional_payload=1 numeric_result_checked=%d "
         "compute_timing=%s grants=%lu arithmetic=%s\n",
         LOC_DMA_APP_BACKEND_NAME, LOC_DMA_APP_NAME,
         (unsigned long)LOC_DMA_APP_ELEMENTS,
         (unsigned long)LOC_DMA_APP_ROUNDS,
         (unsigned long)LOC_DMA_APP_UPLOADS,
         (unsigned long)LOC_DMA_APP_DOWNLOADS,
-        (unsigned long)LOC_DMA_APP_COMMANDS,
+        (unsigned long)LOC_DMA_APP_COMMANDS, LOC_DMA_APP_VERIFY_RESULTS,
         LOC_DMA_APP_COMPUTE_TIMING, (unsigned long)LOC_DMA_APP_GRANTS,
         LOC_DMA_APP_ARITHMETIC);
     return 0;
