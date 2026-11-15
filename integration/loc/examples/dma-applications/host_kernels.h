@@ -22,6 +22,12 @@ void loc_host_pack_points(const struct point *points, int32_t *x, int32_t *y,
     size_t count);
 uint32_t loc_host_knn_select_vote(const struct point *points,
     const int32_t *distances, unsigned long *neighbors, size_t count);
+uint32_t loc_host_knn_heap_vote(const uint32_t *labels,
+    const int32_t *distances, unsigned long *neighbors, size_t count);
+void loc_host_brightness_widen(const uint8_t *pixels, int16_t *input, size_t count);
+void loc_host_tensor_copy(const int32_t *input, int32_t *output, size_t count);
+void loc_host_filter_aggregate_unrolled(const uint64_t *keys,
+    const unsigned char *mask, size_t count, uint64_t *matches, uint64_t *sum);
 void loc_host_filter_aggregate(const uint64_t *keys, const unsigned char *mask,
     size_t count, uint64_t *matches, uint64_t *sum);
 void loc_host_pool_pack(const int32_t *image, int32_t *const packed[4],
@@ -47,6 +53,11 @@ int loc_host_lora_adapter(const int32_t *a, const int32_t *b,
     size_t rows, size_t columns, size_t rank);
 int loc_host_lora_combine(const int32_t *base, const int32_t *correction,
     const int32_t *bias, int32_t *result, size_t rows, int32_t scale);
+void loc_host_kmeans_divide(const int64_t scalars[9], int32_t centroids[3][2], int32_t *history);
+/* Sums ordered SX, SXX, SY, SXY. Reject degenerate/out-of-fixture inputs
+ * before integer products; coefficients are IEEE-754 FP64 bits for slope and intercept. */
+int loc_host_linear_regression(const int64_t sums[4], size_t count,
+    uint64_t coefficients[2]);
 void loc_host_kmeans_assign(const int32_t *distances, int32_t *best,
     uint32_t *assignment, size_t count, unsigned cluster);
 void loc_host_kmeans_update(const struct point *points,

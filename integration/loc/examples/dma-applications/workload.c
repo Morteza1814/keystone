@@ -187,7 +187,118 @@ scalar_command(unsigned long operation, loc_pim_object source, int64_t scalar,
 
 #endif /* PIM backend helpers */
 
-#if LOC_DMA_APP_KIND == 9 || LOC_DMA_APP_KIND == 10
+#if LOC_DMA_APP_KIND == 13
+static int32_t regression_x(unsigned long i) { return (int32_t)((i * 7UL) % 33UL) - 16; }
+static int32_t regression_y(unsigned long i) { return 2 * regression_x(i) + 3 + (int32_t)(i % 5UL) - 2; }
+
+static void
+run_application(void)
+{
+    int32_t *x = new_buffer(LOC_DMA_APP_VECTOR_BYTES);
+    int32_t *y = new_buffer(LOC_DMA_APP_VECTOR_BYTES);
+    int64_t *sums = new_buffer(R * 4 * sizeof(int64_t));
+    uint64_t *fit = new_buffer(R * 2 * sizeof(uint64_t));
+    phase_end(LOC_DA_HOST_ALLOCATE);
+    phase_begin(LOC_DA_INITIALIZE);
+    initialize_buffers();
+    for (unsigned long i = 0; i < N; ++i) {
+        x[i] = regression_x(i); y[i] = regression_y(i);
+    }
+    phase_end(LOC_DA_INITIALIZE);
+    for (unsigned long r = 0; r < R; ++r) {
+        phase_begin(LOC_DA_ALLOCATE_GRANT);
+        const loc_pim_object px = new_object(LOC_DMA_APP_VECTOR_BYTES, 0x2bULL);
+        const loc_pim_object py = new_object(LOC_DMA_APP_VECTOR_BYTES, 0x2bULL);
+        const loc_pim_object scalar = new_object(8, RESULT_PERMISSIONS);
+        phase_end(LOC_DA_ALLOCATE_GRANT);
+        upload(px, x, LOC_DMA_APP_VECTOR_BYTES);
+        phase_begin(LOC_DA_COMPUTE);
+        command(M5_PIM_OP_RED_SUM_INT32, px, 0, scalar);
+        phase_end(LOC_DA_COMPUTE);
+        download(sums + 4*r, scalar, 8);
+        phase_begin(LOC_DA_COMPUTE);
+        command(M5_PIM_OP_MUL_INT32, px, px, py);
+        command(M5_PIM_OP_RED_SUM_INT32, py, 0, scalar);
+        phase_end(LOC_DA_COMPUTE);
+        download(sums + 4*r + 1, scalar, 8);
+        upload(py, y, LOC_DMA_APP_VECTOR_BYTES);
+        phase_begin(LOC_DA_COMPUTE);
+        command(M5_PIM_OP_RED_SUM_INT32, py, 0, scalar);
+        phase_end(LOC_DA_COMPUTE);
+        download(sums + 4*r + 2, scalar, 8);
+        phase_begin(LOC_DA_COMPUTE);
+        command(M5_PIM_OP_MUL_INT32, px, py, px);
+        command(M5_PIM_OP_RED_SUM_INT32, px, 0, scalar);
+        phase_end(LOC_DA_COMPUTE);
+        download(sums + 4*r + 3, scalar, 8);
+        phase_begin(LOC_DA_HOST_FINISH);
+        require(loc_host_linear_regression(sums + 4*r, N, fit + 2*r), 0xfaa1);
+        phase_end(LOC_DA_HOST_FINISH);
+        phase_begin(LOC_DA_FREE);
+        for (; freed_objects < object_count; ++freed_objects)
+            require(!loc_pim_free(objects[freed_objects]), 0xfa0c);
+        phase_end(LOC_DA_FREE);
+    }
+    phase_begin(LOC_DA_CHECK);
+    if (!LOC_DMA_APP_VERIFY_RESULTS) return;
+    int64_t sx=0, sy=0, sxx=0, sxy=0;
+    for (unsigned long i=0; i<N; ++i) {
+        const int64_t a=regression_x(i), b=regression_y(i);
+        require(x[i]==a && y[i]==b, 0xfaa2);
+        sx+=a; sy+=b; sxx+=a*a; sxy+=a*b;
+    }
+    const int64_t nn=N, denom=nn*sxx-sx*sx;
+    require(denom>0, 0xfaa3);
+    const double slope=(double)(nn*sxy-sx*sy)/(double)denom;
+    const double intercept=((double)sy-slope*(double)sx)/(double)nn;
+    for (unsigned long r=0; r<R; ++r) {
+        require(sums[4*r]==sx && sums[4*r+1]==sxx &&
+                sums[4*r+2]==sy && sums[4*r+3]==sxy, 0xfaa4);
+        union { uint64_t bits; double value; } a={.bits=fit[2*r]}, b={.bits=fit[2*r+1]};
+        const double ds=a.value-slope, di=b.value-intercept;
+        require(ds>=-1e-12 && ds<=1e-12 && di>=-1e-12 && di<=1e-12, 0xfaa5);
+    }
+}
+#elif LOC_DMA_APP_KIND == 14
+static int32_t prefix_value(unsigned long i) { return (int32_t)((i * 7UL) % 17UL) - 8; }
+
+static void
+run_application(void)
+{
+    int32_t *x = new_buffer(LOC_DMA_APP_VECTOR_BYTES);
+    int32_t *results = new_buffer(R * LOC_DMA_APP_VECTOR_BYTES);
+    phase_end(LOC_DA_HOST_ALLOCATE);
+    phase_begin(LOC_DA_INITIALIZE);
+    initialize_buffers();
+    for (unsigned long i=0; i<N; ++i) x[i]=prefix_value(i);
+    phase_end(LOC_DA_INITIALIZE);
+    for (unsigned long r=0; r<R; ++r) {
+        phase_begin(LOC_DA_ALLOCATE_GRANT);
+        const loc_pim_object input=new_object(LOC_DMA_APP_VECTOR_BYTES, LOC_PIM_INPUT_PERMISSIONS);
+        const loc_pim_object output=new_object(LOC_DMA_APP_VECTOR_BYTES, RESULT_PERMISSIONS);
+        phase_end(LOC_DA_ALLOCATE_GRANT);
+        upload(input, x, LOC_DMA_APP_VECTOR_BYTES);
+        phase_begin(LOC_DA_COMPUTE);
+        command(M5_PIM_OP_PREFIX_SUM_INT32, input, 0, output);
+        phase_end(LOC_DA_COMPUTE);
+        download(results+r*N, output, LOC_DMA_APP_VECTOR_BYTES);
+        phase_begin(LOC_DA_FREE);
+        for (; freed_objects<object_count; ++freed_objects)
+            require(!loc_pim_free(objects[freed_objects]), 0xfa0c);
+        phase_end(LOC_DA_FREE);
+    }
+    phase_begin(LOC_DA_CHECK);
+    if (!LOC_DMA_APP_VERIFY_RESULTS) return;
+    int64_t sum=0;
+    for (unsigned long i=0; i<N; ++i) {
+        require(x[i]==prefix_value(i), 0xfab1);
+        sum+=prefix_value(i);
+        require(sum>=INT32_MIN && sum<=INT32_MAX, 0xfab2);
+        for (unsigned long r=0; r<R; ++r)
+            require(results[r*N+i]==sum, 0xfab3);
+    }
+}
+#elif LOC_DMA_APP_KIND == 9 || LOC_DMA_APP_KIND == 10
 static int32_t vecadd_a(unsigned long i) { return (int32_t)(i % 257UL) - 128; }
 static int32_t vecadd_b(unsigned long i) { return 127 - (int32_t)(i % 251UL); }
 
@@ -277,13 +388,34 @@ static void
 run_application(void)
 {
     unary_element *input = new_buffer(LOC_DMA_APP_VECTOR_BYTES);
+#if LOC_DMA_APP_PIMBENCH_HOST && LOC_DMA_APP_KIND == 12
+    uint8_t *pixels = new_buffer(N);
+#elif LOC_DMA_APP_PIMBENCH_HOST && LOC_DMA_APP_KIND == 11
+    int32_t *tensor = new_buffer(LOC_DMA_APP_VECTOR_BYTES);
+#endif
     unary_element *results = new_buffer(R * LOC_DMA_APP_VECTOR_BYTES);
     phase_end(LOC_DA_HOST_ALLOCATE);
     phase_begin(LOC_DA_INITIALIZE);
     initialize_buffers();
-    for (unsigned long i = 0; i < N; ++i)
+    for (unsigned long i = 0; i < N; ++i) {
+#if LOC_DMA_APP_PIMBENCH_HOST && LOC_DMA_APP_KIND == 12
+        pixels[i] = unary_input(i);
+#elif LOC_DMA_APP_PIMBENCH_HOST && LOC_DMA_APP_KIND == 11
+        tensor[i] = unary_input(i);
+#else
         input[i] = unary_input(i);
+#endif
+    }
     phase_end(LOC_DA_INITIALIZE);
+#if LOC_DMA_APP_INITIAL_LAYOUT_PHASES
+    phase_begin(LOC_DA_INPUT_LAYOUT);
+#if LOC_DMA_APP_KIND == 12
+    loc_host_brightness_widen(pixels, input, N);
+#else
+    loc_host_tensor_copy(tensor, input, N);
+#endif
+    phase_end(LOC_DA_INPUT_LAYOUT);
+#endif
     for (unsigned long cycle = 0; cycle < LOC_DMA_APP_LIFECYCLES; ++cycle) {
         phase_begin(LOC_DA_ALLOCATE_GRANT);
         const loc_pim_object source = new_object(LOC_DMA_APP_VECTOR_BYTES,
@@ -299,6 +431,15 @@ run_application(void)
         phase_end(LOC_DA_ALLOCATE_GRANT);
         for (unsigned long r = LOC_DMA_APP_COMPLETE_LIFECYCLES ? cycle : 0;
              r < (LOC_DMA_APP_COMPLETE_LIFECYCLES ? cycle + 1 : R); ++r) {
+#if LOC_DMA_APP_PIMBENCH_HOST && !LOC_DMA_APP_INITIAL_LAYOUT_OUTSIDE_KERNEL
+            phase_begin(LOC_DA_HOST_PREPARE);
+#if LOC_DMA_APP_KIND == 12
+            loc_host_brightness_widen(pixels, input, N);
+#else
+            loc_host_tensor_copy(tensor, input, N);
+#endif
+            phase_end(LOC_DA_HOST_PREPARE);
+#endif
             upload(source, input, LOC_DMA_APP_VECTOR_BYTES);
 #if LOC_DMA_APP_KIND == 12
             require(!loc_command_scalar(M5_PIM_OP_ADD_SCALAR_INT16, source,
@@ -311,6 +452,8 @@ run_application(void)
             require(!loc_command_binary(M5_PIM_OP_RELU_INT32, source, 0,
                 result, &commands), 0xfab0);
 #endif
+            /* ReLU's single-channel output is already in final raster order.
+             * Retain each result directly, using the same protected download. */
             download(results + r * N, result, LOC_DMA_APP_VECTOR_BYTES);
         }
 #if LOC_DMA_APP_COMPLETE_LIFECYCLES
@@ -347,6 +490,7 @@ feature(unsigned long index, unsigned long axis)
     return center + noise;
 }
 
+#if !LOC_DMA_APP_PIMBENCH_HOST || LOC_DMA_APP_KIND == 1
 static void
 initialize_points(struct point *points)
 {
@@ -357,6 +501,9 @@ initialize_points(struct point *points)
     }
 }
 
+#endif
+
+#if !LOC_DMA_APP_PIMBENCH_HOST
 static void
 pack_points(const struct point *points, int32_t *x, int32_t *y)
 {
@@ -364,7 +511,9 @@ pack_points(const struct point *points, int32_t *x, int32_t *y)
     loc_host_pack_points(points, x, y, N);
     phase_end(LOC_DA_HOST_PREPARE);
 }
+#endif
 
+#if !LOC_DMA_APP_PIMBENCH_HOST || LOC_DMA_APP_KIND == 1
 static void
 check_points(const struct point *points, const int32_t *x, const int32_t *y)
 {
@@ -374,6 +523,8 @@ check_points(const struct point *points, const int32_t *x, const int32_t *y)
             x[i] == points[i].x && y[i] == points[i].y, 0xfa10);
 }
 
+#endif
+
 #if LOC_DMA_APP_BACKEND != 3
 static void
 distance(loc_pim_object x, loc_pim_object y, loc_pim_object dx,
@@ -382,7 +533,7 @@ distance(loc_pim_object x, loc_pim_object y, loc_pim_object dx,
     phase_begin(LOC_DA_COMPUTE);
     scalar_command(M5_PIM_OP_SUB_SCALAR_INT32, x, qx, dx);
     scalar_command(M5_PIM_OP_SUB_SCALAR_INT32, y, qy, dy);
-#if LOC_DMA_APP_KIND == 1
+#if LOC_DMA_APP_KIND == 1 || LOC_DMA_APP_PIMBENCH_HOST
     command(M5_PIM_OP_ABS_INT32, dx, 0, dx);
     command(M5_PIM_OP_ABS_INT32, dy, 0, dy);
 #else
@@ -407,7 +558,11 @@ query_coordinate(unsigned long round, unsigned long axis)
 static void
 run_application(void)
 {
-    struct point *points = new_buffer(N * sizeof(*points));
+    struct point *points = (LOC_DMA_APP_PIMBENCH_HOST && !LOC_DMA_APP_VERIFY_RESULTS) ?
+        0 : new_buffer(N * sizeof(*points));
+#if LOC_DMA_APP_PIMBENCH_HOST
+    uint32_t *labels = new_buffer(N * sizeof(*labels));
+#endif
     int32_t *x = new_buffer(LOC_DMA_APP_VECTOR_BYTES);
     int32_t *y = new_buffer(LOC_DMA_APP_VECTOR_BYTES);
 #if LOC_DMA_APP_BACKEND != 3
@@ -418,7 +573,12 @@ run_application(void)
     phase_end(LOC_DA_HOST_ALLOCATE);
     phase_begin(LOC_DA_INITIALIZE);
     initialize_buffers();
-    initialize_points(points);
+    if (points) initialize_points(points);
+#if LOC_DMA_APP_PIMBENCH_HOST
+    for (unsigned long i = 0; i < N; ++i) {
+        x[i] = feature(i, 0); y[i] = feature(i, 1); labels[i] = i % 3UL;
+    }
+#endif
     phase_end(LOC_DA_INITIALIZE);
     for (unsigned long cycle = 0; cycle < LOC_DMA_APP_LIFECYCLES; ++cycle) {
 #if LOC_DMA_APP_BACKEND != 3
@@ -433,7 +593,9 @@ run_application(void)
         WORKSPACE_PERMISSIONS);
     phase_end(LOC_DA_ALLOCATE_GRANT);
 #endif
+#if !LOC_DMA_APP_PIMBENCH_HOST
     pack_points(points, x, y);
+#endif
 #if LOC_DMA_APP_BACKEND != 3
     upload(px, x, LOC_DMA_APP_VECTOR_BYTES);
     upload(py, y, LOC_DMA_APP_VECTOR_BYTES);
@@ -490,8 +652,13 @@ run_application(void)
                 winner = c;
         predictions[r] = winner;
 #else
+#if LOC_DMA_APP_PIMBENCH_HOST
+        predictions[r] = loc_host_knn_heap_vote(labels, distances,
+            neighbors + r * LOC_DMA_APP_K, N);
+#else
         predictions[r] = loc_host_knn_select_vote(points, distances,
             neighbors + r * LOC_DMA_APP_K, N);
+#endif
 #endif
 #if LOC_DMA_APP_BACKEND == 3
         phase_end(LOC_DA_COMPUTE);
@@ -519,6 +686,23 @@ run_application(void)
         }
 #endif
         unsigned long chosen[LOC_DMA_APP_K];
+#if LOC_DMA_APP_PIMBENCH_HOST
+        unsigned long retained[LOC_DMA_APP_K];
+        int64_t retained_distance[LOC_DMA_APP_K];
+        for (unsigned long i = 0; i < N; ++i) {
+            int64_t aa = (int64_t)feature(i, 0) - query_coordinate(r, 0);
+            int64_t bb = (int64_t)feature(i, 1) - query_coordinate(r, 1);
+            int64_t value = (aa < 0 ? -aa : aa) + (bb < 0 ? -bb : bb);
+            if (i < LOC_DMA_APP_K) { retained[i] = i; retained_distance[i] = value; }
+            else {
+                unsigned worst = 0;
+                for (unsigned k = 1; k < LOC_DMA_APP_K; ++k)
+                    if (retained_distance[k] > retained_distance[worst] ||
+                        (retained_distance[k] == retained_distance[worst] && retained[k] > retained[worst])) worst = k;
+                if (value < retained_distance[worst]) { retained[worst] = i; retained_distance[worst] = value; }
+            }
+        }
+#endif
         unsigned long votes[3] = {0, 0, 0};
         /* Independent reference: rescan every point to select each neighbor.
          * It uses host arithmetic and never trusts the downloaded distances. */
@@ -527,6 +711,11 @@ run_application(void)
             unsigned long index = N;
             for (unsigned long i = 0; i < N; ++i) {
                 int used = 0;
+#if LOC_DMA_APP_PIMBENCH_HOST
+                unsigned present = 0;
+                for (unsigned j = 0; j < LOC_DMA_APP_K; ++j) present |= retained[j] == i;
+                if (!present) continue;
+#endif
                 for (unsigned long j = 0; j < k; ++j)
                     used |= chosen[j] == i;
                 if (used)
@@ -543,10 +732,11 @@ run_application(void)
             require(index == neighbors[r * LOC_DMA_APP_K + k], 0xfa11);
             ++votes[points[index].label];
         }
-        uint32_t winner = 0;
-        for (uint32_t c = 1; c < 3; ++c)
-            if (votes[c] > votes[winner])
-                winner = c;
+        uint32_t winner = LOC_DMA_APP_PIMBENCH_HOST ? points[chosen[0]].label : 0;
+        for (uint32_t c = 1; c < (LOC_DMA_APP_PIMBENCH_HOST ? LOC_DMA_APP_K : 3); ++c) {
+            uint32_t candidate = LOC_DMA_APP_PIMBENCH_HOST ? points[chosen[c]].label : c;
+            if (votes[candidate] > votes[winner]) winner = candidate;
+        }
         require(predictions[r] == winner, 0xfa12);
     }
 }
@@ -554,6 +744,7 @@ run_application(void)
 static uint64_t
 key_value(unsigned long index)
 {
+    if (LOC_DMA_APP_PIMBENCH_HOST) return (index * 37UL + 13UL) % 1000UL;
     switch (index % 5UL) {
       case 0: return 0;
       case 1: return UINT64_MAX;
@@ -565,6 +756,7 @@ key_value(unsigned long index)
 static uint64_t
 threshold_value(unsigned long round)
 {
+    if (LOC_DMA_APP_PIMBENCH_HOST) return 10;
     if (LOC_DMA_APP_COMPLETE_LIFECYCLES) round = 0;
     switch (round % 3UL) {
       case 0: return UINT64_C(0x8000000000000040);
@@ -629,7 +821,11 @@ run_application(void)
         counts[r] = count;
         sums[r] = sum;
 #else
+#if LOC_DMA_APP_PIMBENCH_HOST
+        loc_host_filter_aggregate_unrolled(keys, mask, N, &counts[r], &sums[r]);
+#else
         loc_host_filter_aggregate(keys, mask, N, &counts[r], &sums[r]);
+#endif
 #endif
 #if LOC_DMA_APP_BACKEND == 3
         phase_end(LOC_DA_COMPUTE);
@@ -714,6 +910,11 @@ run_application(void)
         image[i] = pixel(i);
 #endif
     phase_end(LOC_DA_INITIALIZE);
+#if LOC_DMA_APP_INITIAL_LAYOUT_PHASES
+    phase_begin(LOC_DA_INPUT_LAYOUT);
+    loc_host_pool_pack(image, packed, width, height);
+    phase_end(LOC_DA_INPUT_LAYOUT);
+#endif
     for (unsigned long cycle = 0; cycle < LOC_DMA_APP_LIFECYCLES; ++cycle) {
 #if LOC_DMA_APP_BACKEND != 3
     phase_begin(LOC_DA_ALLOCATE_GRANT);
@@ -726,7 +927,7 @@ run_application(void)
     phase_end(LOC_DA_ALLOCATE_GRANT);
 #endif
 #if LOC_DMA_APP_BACKEND != 3
-#if !LOC_DMA_APP_PREPACKED_INPUTS
+#if !LOC_DMA_APP_PREPACKED_INPUTS && !LOC_DMA_APP_INITIAL_LAYOUT_OUTSIDE_KERNEL
     phase_begin(LOC_DA_HOST_PREPARE);
     loc_host_pool_pack(image, packed, width, height);
     phase_end(LOC_DA_HOST_PREPARE);
@@ -792,6 +993,99 @@ run_application(void)
             }
             for (unsigned long r = 0; r < R; ++r)
                 require(result[r * N + row * width + col] == expected, 0xfa32);
+        }
+    }
+}
+#elif LOC_DMA_APP_KIND == 4 && LOC_DMA_APP_PIMBENCH_HOST
+static void
+run_application(void)
+{
+    int32_t *x = new_buffer(LOC_DMA_APP_VECTOR_BYTES);
+    int32_t *y = new_buffer(LOC_DMA_APP_VECTOR_BYTES);
+    int32_t *distances = new_buffer(3UL * LOC_DMA_APP_VECTOR_BYTES);
+    int64_t *scalars = new_buffer(9UL * sizeof(int64_t));
+    int32_t *history = new_buffer(6UL * LOC_DMA_APP_KMEANS_TOTAL_ITERATIONS * sizeof(int32_t));
+    phase_end(LOC_DA_HOST_ALLOCATE);
+    phase_begin(LOC_DA_INITIALIZE);
+    initialize_buffers();
+    for (unsigned long i = 0; i < N; ++i) { x[i] = feature(i, 0); y[i] = feature(i, 1); }
+    phase_end(LOC_DA_INITIALIZE);
+    for (unsigned long cycle = 0; cycle < LOC_DMA_APP_LIFECYCLES; ++cycle) {
+        int32_t centroids[3][2];
+        for (unsigned c = 0; c < 3; ++c) { centroids[c][0] = feature(c, 0); centroids[c][1] = feature(c, 1); }
+        phase_begin(LOC_DA_ALLOCATE_GRANT);
+        loc_pim_object px = new_object(LOC_DMA_APP_VECTOR_BYTES, LOC_PIM_INPUT_PERMISSIONS);
+        loc_pim_object py = new_object(LOC_DMA_APP_VECTOR_BYTES, LOC_PIM_INPUT_PERMISSIONS);
+        loc_pim_object dx = new_object(LOC_DMA_APP_VECTOR_BYTES, RESULT_PERMISSIONS | LOC_PIM_COPY_TO_PERMISSIONS);
+        loc_pim_object dy = new_object(LOC_DMA_APP_VECTOR_BYTES, WORKSPACE_PERMISSIONS);
+        loc_pim_object best = new_object(LOC_DMA_APP_VECTOR_BYTES, WORKSPACE_PERMISSIONS | LOC_PIM_COPY_TO_PERMISSIONS);
+        loc_pim_object mask = new_object(LOC_DMA_APP_VECTOR_BYTES, WORKSPACE_PERMISSIONS);
+        loc_pim_object reduced = new_object(sizeof(int64_t), RESULT_PERMISSIONS);
+        phase_end(LOC_DA_ALLOCATE_GRANT);
+        upload(px, x, LOC_DMA_APP_VECTOR_BYTES);
+        upload(py, y, LOC_DMA_APP_VECTOR_BYTES);
+        for (unsigned long it = 0; it < LOC_DMA_APP_KMEANS_ITERATIONS; ++it) {
+            /* Keep PIMbench's host staging of all distances and its reuploads.
+             * Every scalar reduction is returned through protected DMA too. */
+            for (unsigned c = 0; c < 3; ++c) {
+                distance(px, py, dx, dy, centroids[c][0], centroids[c][1]);
+                download(distances + c * N, dx, LOC_DMA_APP_VECTOR_BYTES);
+                if (c == 0) upload(best, distances, LOC_DMA_APP_VECTOR_BYTES);
+                else {
+                    phase_begin(LOC_DA_COMPUTE);
+                    command(M5_PIM_OP_MIN_INT32, dx, best, best);
+                    phase_end(LOC_DA_COMPUTE);
+                }
+            }
+            for (unsigned c = 0; c < 3; ++c) {
+                upload(dx, distances + c * N, LOC_DMA_APP_VECTOR_BYTES);
+                phase_begin(LOC_DA_COMPUTE);
+                command(M5_PIM_OP_EQ_INT32, dx, best, mask);
+                command(M5_PIM_OP_RED_SUM_INT32, mask, 0, reduced);
+                phase_end(LOC_DA_COMPUTE);
+                download(scalars + 3 * c, reduced, sizeof(int64_t));
+                for (unsigned axis = 0; axis < 2; ++axis) {
+                    phase_begin(LOC_DA_COMPUTE);
+                    command(M5_PIM_OP_MUL_INT32, mask, axis ? py : px, dy);
+                    command(M5_PIM_OP_RED_SUM_INT32, dy, 0, reduced);
+                    phase_end(LOC_DA_COMPUTE);
+                    download(scalars + 3 * c + 1 + axis, reduced, sizeof(int64_t));
+                }
+            }
+            phase_begin(LOC_DA_HOST_FINISH);
+            loc_host_kmeans_divide(scalars, centroids,
+                history + 6UL * (cycle * LOC_DMA_APP_KMEANS_ITERATIONS + it));
+            phase_end(LOC_DA_HOST_FINISH);
+        }
+        phase_begin(LOC_DA_FREE);
+        for (; freed_objects < object_count; ++freed_objects)
+            require(!loc_pim_free(objects[freed_objects]), 0xfa0c);
+        phase_end(LOC_DA_FREE);
+    }
+    phase_begin(LOC_DA_CHECK);
+    if (!LOC_DMA_APP_VERIFY_RESULTS) return;
+    /* Independent scalar reference. Equal minima belong to each tied cluster,
+     * matching PIMbench's EQ-to-min mask, not a hidden first-cluster policy. */
+    for (unsigned long cycle = 0; cycle < LOC_DMA_APP_LIFECYCLES; ++cycle) {
+        int64_t center[3][2];
+        for (unsigned c = 0; c < 3; ++c) { center[c][0] = feature(c, 0); center[c][1] = feature(c, 1); }
+        for (unsigned long it = 0; it < LOC_DMA_APP_KMEANS_ITERATIONS; ++it) {
+            int64_t sums[3][2] = {{0}}, counts[3] = {0};
+            for (unsigned long i = 0; i < N; ++i) {
+                int64_t d[3], minimum = INT64_MAX;
+                for (unsigned c = 0; c < 3; ++c) {
+                    int64_t a = feature(i, 0) - center[c][0], b = feature(i, 1) - center[c][1];
+                    d[c] = (a < 0 ? -a : a) + (b < 0 ? -b : b);
+                    if (d[c] < minimum) minimum = d[c];
+                }
+                for (unsigned c = 0; c < 3; ++c) if (d[c] == minimum) {
+                    ++counts[c]; sums[c][0] += feature(i, 0); sums[c][1] += feature(i, 1);
+                }
+            }
+            for (unsigned c = 0; c < 3; ++c) for (unsigned axis = 0; axis < 2; ++axis) {
+                if (counts[c]) center[c][axis] = sums[c][axis] / counts[c];
+                require(history[6UL * (cycle * LOC_DMA_APP_KMEANS_ITERATIONS + it) + 2 * c + axis] == center[c][axis], 0xfa40);
+            }
         }
     }
 }
@@ -1009,6 +1303,11 @@ run_application(void)
         image[i] = downsample_pixel(i, width);
 #endif
     phase_end(LOC_DA_INITIALIZE);
+#if LOC_DMA_APP_INITIAL_LAYOUT_PHASES
+    phase_begin(LOC_DA_INPUT_LAYOUT);
+    loc_host_downsample_pack(image, packed, width, height);
+    phase_end(LOC_DA_INPUT_LAYOUT);
+#endif
 
     for (unsigned long cycle = 0; cycle < LOC_DMA_APP_LIFECYCLES; ++cycle) {
     phase_begin(LOC_DA_ALLOCATE_GRANT);
@@ -1019,7 +1318,7 @@ run_application(void)
     const loc_pim_object scratch = new_object(N, WORKSPACE_PERMISSIONS);
     phase_end(LOC_DA_ALLOCATE_GRANT);
 
-#if !LOC_DMA_APP_PREPACKED_INPUTS
+#if !LOC_DMA_APP_PREPACKED_INPUTS && !LOC_DMA_APP_INITIAL_LAYOUT_OUTSIDE_KERNEL
     phase_begin(LOC_DA_HOST_PREPARE);
     loc_host_downsample_pack(image, packed, width, height);
     phase_end(LOC_DA_HOST_PREPARE);
@@ -1119,6 +1418,11 @@ run_application(void)
         }
     }
     phase_end(LOC_DA_INITIALIZE);
+#if LOC_DMA_APP_INITIAL_LAYOUT_PHASES
+    phase_begin(LOC_DA_INPUT_LAYOUT);
+    loc_host_gemm_pack(a, b, a_columns, b_columns, D);
+    phase_end(LOC_DA_INPUT_LAYOUT);
+#endif
 
     for (unsigned long cycle = 0; cycle < LOC_DMA_APP_LIFECYCLES; ++cycle) {
     phase_begin(LOC_DA_ALLOCATE_GRANT);
@@ -1128,9 +1432,11 @@ run_application(void)
         RESULT_PERMISSIONS | LOC_PIM_COPY_TO_PERMISSIONS);
     phase_end(LOC_DA_ALLOCATE_GRANT);
 
+#if !LOC_DMA_APP_INITIAL_LAYOUT_OUTSIDE_KERNEL
     phase_begin(LOC_DA_HOST_PREPARE);
     loc_host_gemm_pack(a, b, a_columns, b_columns, D);
     phase_end(LOC_DA_HOST_PREPARE);
+#endif
 
     for (unsigned long r = LOC_DMA_APP_COMPLETE_LIFECYCLES ? cycle : 0;
          r < (LOC_DMA_APP_COMPLETE_LIFECYCLES ? cycle + 1 : R); ++r) {
@@ -1206,7 +1512,9 @@ static void
 run_application(void)
 {
     int32_t *matrix = new_buffer(MATRIX_BYTES);
-#if !LOC_DMA_APP_LORA_PLACED
+#if LOC_DMA_APP_KIND == 7 && LOC_DMA_APP_PIMBENCH_HOST
+    int32_t *columns = matrix;
+#elif !LOC_DMA_APP_LORA_PLACED
     int32_t *columns = new_buffer(LOC_DMA_APP_LORA_RESIDENT ?
         LOC_DMA_APP_VECTOR_BYTES * LOC_DMA_APP_PACK_COLUMNS : MATRIX_BYTES);
 #endif
@@ -1226,7 +1534,7 @@ run_application(void)
     phase_end(LOC_DA_HOST_ALLOCATE);
     phase_begin(LOC_DA_INITIALIZE);
     initialize_buffers();
-#if LOC_DMA_APP_LORA_PLACED
+#if LOC_DMA_APP_COLUMN_INPUT
     for (unsigned long row = 0; row < N; ++row) zero[row] = 0;
     for (unsigned long col = 0; col < K; ++col)
         for (unsigned long row = 0; row < N; ++row)
@@ -1301,7 +1609,7 @@ run_application(void)
         upload_bytes += bytes;
         phase_end(LOC_DA_UPLOAD);
     }
-#else
+#elif !LOC_DMA_APP_COLUMN_INPUT
     phase_begin(LOC_DA_HOST_PREPARE);
     loc_host_gemv_pack(matrix, columns, N, K);
     phase_end(LOC_DA_HOST_PREPARE);
@@ -1373,10 +1681,10 @@ run_application(void)
     for (unsigned long row = 0; row < N; ++row) {
         require(zero[row] == 0, 0xfa81);
         for (unsigned long col = 0; col < K; ++col) {
-            require(matrix[LOC_DMA_APP_LORA_PLACED ? col * N + row : row * K + col]
+            require(matrix[LOC_DMA_APP_COLUMN_INPUT ? col * N + row : row * K + col]
                 == gemv_matrix_value(row, col),
                 0xfa82);
-#if LOC_DMA_APP_LORA_PLACED
+#if LOC_DMA_APP_COLUMN_INPUT
             /* All original weight values were independently checked above. */
 #elif !LOC_DMA_APP_LORA_RESIDENT
             require(columns[col * N + row] == matrix[row * K + col], 0xfa83);
@@ -1391,7 +1699,7 @@ run_application(void)
              * operands. K<=1024 and inputs in [-8,8] bound |sum|<=65536. */
             int64_t expected = 0;
             for (unsigned long col = 0; col < K; ++col)
-                expected += (int64_t)(LOC_DMA_APP_LORA_PLACED ?
+                expected += (int64_t)(LOC_DMA_APP_COLUMN_INPUT ?
                     gemv_matrix_value(row, col) : matrix[row * K + col]) *
                     vectors[r * K + col];
             require(expected >= INT32_MIN && expected <= INT32_MAX, 0xfa85);

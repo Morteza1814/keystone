@@ -10,7 +10,7 @@ main(void)
 #elif LOC_DMA_APP_KIND == 7 || LOC_DMA_APP_KIND == 8
     printf("{\"gemv_rows\":%lu,\"gemv_columns\":%lu,",
         (unsigned long)LOC_DMA_APP_ELEMENTS, (unsigned long)LOC_DMA_APP_GEMV_COLUMNS);
-#if LOC_DMA_APP_LORA_PLACED
+#if LOC_DMA_APP_COLUMN_INPUT
     printf("\"input_layout\":\"column_major\",\"host_packing\":\"none_preformatted_weights\","
         "\"packing_timing_scope\":\"not_required_for_declared_input_layout\",");
 #else
@@ -20,12 +20,29 @@ main(void)
 #else
     printf("{");
 #endif
+    printf("\"pimbench_host\":%d,", LOC_DMA_APP_PIMBENCH_HOST);
+    printf("\"initial_layout_outside_kernel\":%d,\"initial_layout_phases\":%d,"
+        "\"measurement_scope\":\"%s\",",
+        LOC_DMA_APP_INITIAL_LAYOUT_OUTSIDE_KERNEL, LOC_DMA_APP_INITIAL_LAYOUT_PHASES,
+        LOC_DMA_APP_INITIAL_LAYOUT_OUTSIDE_KERNEL ? "kernel_ready_inputs" : "application_with_input_preparation");
+    printf("\"initial_layout_timing\":\"%s\","
+        "\"intermediate_host_work_timed\":true,\"output_conversion_timed\":true,",
+        LOC_DMA_APP_INITIAL_LAYOUT_PHASES ? "input_layout_prepare_before_pim_allocation" :
+        (LOC_DMA_APP_PREPARE_PHASES ? "host_prepare_inside_application" : "not_required"));
+#if LOC_DMA_APP_PIMBENCH_HOST && LOC_DMA_APP_KIND == 11
+    printf("\"input_layout\":\"single_channel_raster\",\"host_packing\":\"flatten_1x1\",");
+#elif LOC_DMA_APP_PIMBENCH_HOST && LOC_DMA_APP_KIND == 12
+    printf("\"input_layout\":\"uint8_pixels\",\"host_packing\":\"widen_uint8_to_int16\",");
+#endif
+#if LOC_DMA_APP_KIND == 11
+    printf("\"direct_result_download\":true,");
+#endif
     printf("\"numeric_result_checked\":%s,\"verification_policy\":\"%s\",",
         LOC_DMA_APP_VERIFY_RESULTS ? "true" : "false",
         LOC_DMA_APP_VERIFY_RESULTS ? "independent_guest_reference" : "timing_only");
     printf("\"host_buffer_prefill\":%s,",
         LOC_DMA_APP_PREFILL_BUFFERS ? "true" : "false");
-#if (LOC_DMA_APP_KIND >= 9 && LOC_DMA_APP_KIND <= 12) || \
+#if (LOC_DMA_APP_KIND >= 9 && LOC_DMA_APP_KIND <= 14) || \
     LOC_DMA_APP_KIND == 1 || LOC_DMA_APP_KIND == 2 || \
     LOC_DMA_APP_KIND == 3 || LOC_DMA_APP_KIND == 4 || LOC_DMA_APP_KIND == 5 || \
     LOC_DMA_APP_KIND == 6 || LOC_DMA_APP_KIND == 7
@@ -45,7 +62,8 @@ main(void)
         4UL * LOC_DMA_APP_ELEMENTS, (unsigned long)LOC_DMA_APP_ELEMENT_BYTES,
         LOC_DMA_APP_PREPACKED_INPUTS ? "four_packed_window_vectors" : "single_channel_row_major",
         LOC_DMA_APP_PREPACKED_INPUTS,
-        LOC_DMA_APP_PREPACKED_INPUTS ? "initialization_outside_kernel" : "host_prepare_inside_application");
+        LOC_DMA_APP_PREPACKED_INPUTS ? "initialization_outside_kernel" :
+        (LOC_DMA_APP_INITIAL_LAYOUT_PHASES ? "input_layout_prepare_before_pim_allocation" : "host_prepare_inside_application"));
     printf("\"image_fixture_generation\":\"%s\",\"image_raster_workspace_bytes\":%lu,",
         LOC_DMA_APP_PREPACKED_INPUTS ? "direct_packed" : "raster_then_pack",
         LOC_DMA_APP_PREPACKED_INPUTS ? 0UL : 4UL * LOC_DMA_APP_VECTOR_BYTES);
@@ -55,21 +73,39 @@ main(void)
         LOC_DMA_APP_COMPLETE_LIFECYCLES ? "fixed_request_per_lifecycle" : "vary_by_round");
 #if LOC_DMA_APP_KIND == 1
     printf("\"knn_dimensions\":2,\"knn_k\":5,\"knn_distance\":\"manhattan\","
-        "\"input_layout\":\"array_of_points_x_y_label\","
-        "\"host_packing\":\"two_feature_vectors\","
-        "\"distance_bound\":294,");
+        "\"input_layout\":\"%s\",\"host_packing\":\"%s\","
+        "\"host_selection\":\"%s\",\"distance_bound\":294,",
+        LOC_DMA_APP_PIMBENCH_HOST ? "feature_major_with_separate_labels" : "array_of_points_x_y_label",
+        LOC_DMA_APP_PIMBENCH_HOST ? "none_feature_major_input" : "two_feature_vectors",
+        LOC_DMA_APP_PIMBENCH_HOST ? "max_heap_top5_nearest_vote_tie" : "insertion_top5_lowest_label_tie");
 #else
+    if (LOC_DMA_APP_PIMBENCH_HOST)
+        printf("\"key_distribution\":\"permuted_uniform_0_to_999\",\"threshold\":10,"
+            "\"target_selectivity\":0.01,\"host_aggregation\":\"eight_lane_bitmap_scan\",");
     printf("\"key_bits\":64,\"result_layout\":\"packed_lsb_first_bitmap\","
         "\"sum_semantics\":\"modulo_2_64\",");
 #endif
 #endif
 #if LOC_DMA_APP_KIND == 4
+    if (LOC_DMA_APP_PIMBENCH_HOST)
+        printf("\"input_layout\":\"feature_major\",\"host_packing\":\"none_feature_major_input\","
+            "\"kmeans_distance\":\"manhattan\",\"membership\":\"all_equal_minima\","
+            "\"coordinate_sum\":\"membership_times_coordinate_reduction\",");
     printf("\"kmeans_iterations_per_request\":%lu,\"kmeans_total_iterations\":%lu,",
         (unsigned long)LOC_DMA_APP_KMEANS_ITERATIONS,
         (unsigned long)LOC_DMA_APP_KMEANS_TOTAL_ITERATIONS);
 #endif
 #if LOC_DMA_APP_KIND == 7
     printf("\"direct_result_download\":%s,", LOC_DMA_APP_COMPLETE_LIFECYCLES ? "true" : "false");
+#endif
+#if LOC_DMA_APP_KIND == 13
+    printf("\"regression_mapping\":\"pimbench_four_reductions_two_products\","
+        "\"host_fit\":\"software_ieee754_fp64_slope_intercept\",\"input_layout\":\"two_int32_vectors\","
+        "\"max_abs_x\":16,\"max_abs_y\":37,\"nonconstant_x\":true,");
+#elif LOC_DMA_APP_KIND == 14
+    printf("\"prefix_mapping\":\"pimbench_bank_level_native\",\"input_layout\":\"int32_vector\","
+        "\"prefix_timing_scope\":\"pimeval_including_analytical_cross_bank_coordination\","
+        "\"prefix_abs_bound\":%lu,", 8UL * LOC_DMA_APP_ELEMENTS);
 #endif
 #if LOC_DMA_APP_KIND == 12
     printf("\"brightness_offset\":%ld,", LOC_DMA_APP_BRIGHTNESS_OFFSET);
@@ -142,7 +178,12 @@ main(void)
     if (LOC_DMA_APP_HOST_FINISH_PHASES)
         printf(",\"host_finish\":%lu", (unsigned long)LOC_DMA_APP_HOST_FINISH_PHASES);
     printf("},\"operation_counts\":{");
-#if LOC_DMA_APP_KIND == 9
+#if LOC_DMA_APP_KIND == 13
+    printf("\"mulInt32\":%lu,\"redSumInt32\":%lu",
+        2UL * LOC_DMA_APP_ROUNDS, 4UL * LOC_DMA_APP_ROUNDS);
+#elif LOC_DMA_APP_KIND == 14
+    printf("\"prefixSumInt32\":%lu", (unsigned long)LOC_DMA_APP_ROUNDS);
+#elif LOC_DMA_APP_KIND == 9
     printf("\"addInt32\":%lu", (unsigned long)LOC_DMA_APP_ROUNDS);
 #elif LOC_DMA_APP_KIND == 11
     printf("\"reluInt32\":%lu", (unsigned long)LOC_DMA_APP_ROUNDS);
@@ -159,9 +200,18 @@ main(void)
 #elif LOC_DMA_APP_KIND == 3
     printf("\"maxInt32\":%lu", 3UL * LOC_DMA_APP_ROUNDS);
 #elif LOC_DMA_APP_KIND == 4
+#if LOC_DMA_APP_PIMBENCH_HOST
+    printf("\"addInt32\":%lu,\"subScalarInt32\":%lu,\"absInt32\":%lu,"
+           "\"minInt32\":%lu,\"eqInt32\":%lu,\"mulInt32\":%lu,\"redSumInt32\":%lu",
+        3UL * LOC_DMA_APP_KMEANS_TOTAL_ITERATIONS, 6UL * LOC_DMA_APP_KMEANS_TOTAL_ITERATIONS,
+        6UL * LOC_DMA_APP_KMEANS_TOTAL_ITERATIONS, 2UL * LOC_DMA_APP_KMEANS_TOTAL_ITERATIONS,
+        3UL * LOC_DMA_APP_KMEANS_TOTAL_ITERATIONS, 6UL * LOC_DMA_APP_KMEANS_TOTAL_ITERATIONS,
+        9UL * LOC_DMA_APP_KMEANS_TOTAL_ITERATIONS);
+#else
     printf("\"addInt32\":%lu,\"subScalarInt32\":%lu,\"mulInt32\":%lu",
         3UL * LOC_DMA_APP_KMEANS_TOTAL_ITERATIONS, 6UL * LOC_DMA_APP_KMEANS_TOTAL_ITERATIONS,
         6UL * LOC_DMA_APP_KMEANS_TOTAL_ITERATIONS);
+#endif
 #elif LOC_DMA_APP_KIND == 5
     printf("\"addUint8\":%lu,\"shiftBitsRightUint8\":%lu",
         3UL * LOC_DMA_APP_ROUNDS, 4UL * LOC_DMA_APP_ROUNDS);

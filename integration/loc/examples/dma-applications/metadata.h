@@ -28,10 +28,40 @@
 #ifndef LOC_DMA_APP_ELEMENTS
 #define LOC_DMA_APP_ELEMENTS 128UL
 #endif
+/* Opt-in PIMbench host/data-layout contract. Legacy results remain reproducible. */
+#ifndef LOC_DMA_APP_PIMBENCH_HOST
+#define LOC_DMA_APP_PIMBENCH_HOST 0
+#endif
+#if LOC_DMA_APP_PIMBENCH_HOST != 0 && LOC_DMA_APP_PIMBENCH_HOST != 1
+#error "PIMBENCH_HOST must be 0 or 1"
+#endif
+#if LOC_DMA_APP_PIMBENCH_HOST && LOC_DMA_APP_BACKEND == 3
+#error "PIMbench host alignment is supported by the two PIM backends"
+#endif
+/* Keep the original application scope reproducible. In kernel scope, initial
+ * layout conversion runs once before any PIM object exists and is reported
+ * separately. Intermediate host work and final output conversion stay timed. */
+#ifndef LOC_DMA_APP_INITIAL_LAYOUT_OUTSIDE_KERNEL
+#define LOC_DMA_APP_INITIAL_LAYOUT_OUTSIDE_KERNEL 0
+#endif
+#if LOC_DMA_APP_INITIAL_LAYOUT_OUTSIDE_KERNEL != 0 && LOC_DMA_APP_INITIAL_LAYOUT_OUTSIDE_KERNEL != 1
+#error "INITIAL_LAYOUT_OUTSIDE_KERNEL must be 0 or 1"
+#endif
+#if LOC_DMA_APP_INITIAL_LAYOUT_OUTSIDE_KERNEL && !LOC_DMA_APP_PIMBENCH_HOST
+#error "Separate initial layout requires PIMbench host algorithms"
+#endif
+#if LOC_DMA_APP_KIND >= 13 && !LOC_DMA_APP_COMPLETE_LIFECYCLES
+#error "Regression/prefix benchmarks require complete PIM lifecycles"
+#endif
+#define LOC_DMA_APP_COLUMN_INPUT \
+    (LOC_DMA_APP_LORA_PLACED || (LOC_DMA_APP_KIND == 7 && LOC_DMA_APP_PIMBENCH_HOST))
 /* Input layout conversion is optional and explicit; intermediate conversion
  * still belongs to the measured application when required. */
 #ifndef LOC_DMA_APP_PREPACKED_INPUTS
 #define LOC_DMA_APP_PREPACKED_INPUTS 0
+#endif
+#if LOC_DMA_APP_PIMBENCH_HOST && LOC_DMA_APP_PREPACKED_INPUTS
+#error "PIMbench image wrapper starts from raster input, not prepacked input"
 #endif
 #if LOC_DMA_APP_PREPACKED_INPUTS != 0 && LOC_DMA_APP_PREPACKED_INPUTS != 1
 #error "PREPACKED_INPUTS must be 0 or 1"
@@ -49,8 +79,8 @@
 #if LOC_DMA_APP_BACKEND < 1 || LOC_DMA_APP_BACKEND > 3
 #error "LOC_DMA_APP_BACKEND must be 1=secure, 2=unsecured or 3=cpu"
 #endif
-#if LOC_DMA_APP_KIND < 1 || LOC_DMA_APP_KIND > 12
-#error "LOC_DMA_APP_KIND must be 1=knn, 2=filter, 3=pool, 4=kmeans, 5=downsampling, 6=gemm, 7=gemv, 8=lora, 9=vecadd, 10=axpy, 11=relu or 12=brightness"
+#if LOC_DMA_APP_KIND < 1 || LOC_DMA_APP_KIND > 14
+#error "LOC_DMA_APP_KIND must be 1=knn, 2=filter, 3=pool, 4=kmeans, 5=downsampling, 6=gemm, 7=gemv, 8=lora, 9=vecadd, 10=axpy, 11=relu 12=brightness, 13=linear regression or 14=prefix sum"
 #endif
 #if LOC_DMA_APP_KIND >= 5 && LOC_DMA_APP_BACKEND == 3
 #error "Downsampling, GEMM, GEMV and LoRA currently support secure and unsecured PIM backends only"
@@ -83,7 +113,20 @@
 #define LOC_DMA_APP_LORA_RANK 8UL
 #endif
 #define LOC_DMA_APP_PACK_COLUMNS 16UL
-#if LOC_DMA_APP_KIND >= 9 && LOC_DMA_APP_KIND <= 12
+#define LOC_DMA_APP_INITIAL_LAYOUT_PHASES \
+    (LOC_DMA_APP_INITIAL_LAYOUT_OUTSIDE_KERNEL && \
+     (LOC_DMA_APP_KIND == 3 || LOC_DMA_APP_KIND == 5 || LOC_DMA_APP_KIND == 6 || \
+      LOC_DMA_APP_KIND == 11 || LOC_DMA_APP_KIND == 12))
+#if LOC_DMA_APP_INITIAL_LAYOUT_OUTSIDE_KERNEL && LOC_DMA_APP_KIND == 8 && !LOC_DMA_APP_LORA_PLACED
+#error "Kernel-scope LoRA requires the existing preformatted placed-weight mode"
+#endif
+#if LOC_DMA_APP_INITIAL_LAYOUT_PHASES
+#define LOC_DMA_APP_PREPARE_PHASES 0UL
+#elif LOC_DMA_APP_PIMBENCH_HOST && (LOC_DMA_APP_KIND == 11 || LOC_DMA_APP_KIND == 12)
+#define LOC_DMA_APP_PREPARE_PHASES LOC_DMA_APP_ROUNDS
+#elif LOC_DMA_APP_PIMBENCH_HOST && (LOC_DMA_APP_KIND == 1 || LOC_DMA_APP_KIND == 4 || LOC_DMA_APP_KIND == 7)
+#define LOC_DMA_APP_PREPARE_PHASES 0UL
+#elif LOC_DMA_APP_KIND >= 9 && LOC_DMA_APP_KIND <= 14
 #define LOC_DMA_APP_PREPARE_PHASES 0UL
 #elif LOC_DMA_APP_PREPACKED_INPUTS
 #define LOC_DMA_APP_PREPARE_PHASES 0UL
@@ -129,7 +172,7 @@
 #endif
 #if LOC_DMA_APP_COMPLETE_LIFECYCLES < 0 || LOC_DMA_APP_COMPLETE_LIFECYCLES > 1 || \
     (LOC_DMA_APP_COMPLETE_LIFECYCLES && \
-     (LOC_DMA_APP_KIND == 8 || LOC_DMA_APP_KIND > 12 || LOC_DMA_APP_BACKEND == 3))
+     (LOC_DMA_APP_KIND == 8 || LOC_DMA_APP_KIND > 14 || LOC_DMA_APP_BACKEND == 3))
 #error "Complete lifecycles require a supported vector/image PIM workload"
 #endif
 #define LOC_DMA_APP_LIFECYCLES \
@@ -183,21 +226,30 @@
 #define LOC_DMA_APP_VECTOR_BYTES (LOC_DMA_APP_ELEMENT_BYTES * LOC_DMA_APP_ELEMENTS)
 #if LOC_DMA_APP_KIND == 3 || LOC_DMA_APP_KIND == 5
 #define LOC_DMA_APP_INPUTS 4UL
-#elif LOC_DMA_APP_KIND == 2 || LOC_DMA_APP_KIND == 11 || LOC_DMA_APP_KIND == 12
+#elif LOC_DMA_APP_KIND == 2 || LOC_DMA_APP_KIND == 11 || LOC_DMA_APP_KIND == 12 || LOC_DMA_APP_KIND == 14
 #define LOC_DMA_APP_INPUTS 1UL
 #else
 #define LOC_DMA_APP_INPUTS 2UL
 #endif
 #define LOC_DMA_APP_MASK_BYTES ((LOC_DMA_APP_ELEMENTS + 7UL) / 8UL)
-#if LOC_DMA_APP_KIND >= 9 && LOC_DMA_APP_KIND <= 12
+#if LOC_DMA_APP_KIND == 13
+/* X, Y, four INT64 reductions and two FP64 coefficients per request. */
 #define LOC_DMA_APP_PRIVATE_BYTES \
-    (((LOC_DMA_APP_ELEMENT_BYTES * (LOC_DMA_APP_INPUTS + LOC_DMA_APP_ROUNDS) * LOC_DMA_APP_ELEMENTS + \
+    (((8UL * LOC_DMA_APP_ELEMENTS + 48UL * LOC_DMA_APP_ROUNDS + 65536UL + 4095UL) / 4096UL) * 4096UL)
+#elif LOC_DMA_APP_KIND == 14
+#define LOC_DMA_APP_PRIVATE_BYTES \
+    (((4UL * (1UL + LOC_DMA_APP_ROUNDS) * LOC_DMA_APP_ELEMENTS + 65536UL + 4095UL) / 4096UL) * 4096UL)
+#elif LOC_DMA_APP_KIND >= 9 && LOC_DMA_APP_KIND <= 12
+#define LOC_DMA_APP_PRIVATE_BYTES \
+    (((LOC_DMA_APP_ELEMENT_BYTES * (LOC_DMA_APP_INPUTS + LOC_DMA_APP_ROUNDS + \
+       (LOC_DMA_APP_PIMBENCH_HOST ? (LOC_DMA_APP_KIND == 11 ? 1UL : \
+        LOC_DMA_APP_KIND == 12 ? 2UL : 0UL) : 0UL)) * LOC_DMA_APP_ELEMENTS + \
        65536UL) + 4095UL) / 4096UL * 4096UL)
 #elif LOC_DMA_APP_KIND == 1
 /* Points (x,y,label), packed features, every downloaded distance vector,
  * predictions/neighbors, and guard/alignment space. */
 #define LOC_DMA_APP_PRIVATE_BYTES \
-    ((((5UL + LOC_DMA_APP_ROUNDS) * LOC_DMA_APP_VECTOR_BYTES + \
+    (((((LOC_DMA_APP_PIMBENCH_HOST ? (3UL + 3UL * LOC_DMA_APP_VERIFY_RESULTS) : 5UL) + LOC_DMA_APP_ROUNDS) * LOC_DMA_APP_VECTOR_BYTES + \
         44UL * LOC_DMA_APP_ROUNDS + 65536UL) + 4095UL) / 4096UL * 4096UL)
 #elif LOC_DMA_APP_KIND == 2
 #define LOC_DMA_APP_PRIVATE_BYTES \
@@ -223,7 +275,7 @@
         LOC_DMA_APP_ROUNDS * LOC_DMA_APP_LORA_RANK) + 65536UL) + 4095UL) / 4096UL * 4096UL)
 #elif LOC_DMA_APP_KIND == 7
 #define LOC_DMA_APP_PRIVATE_BYTES \
-    (((4UL * (2UL * LOC_DMA_APP_ELEMENTS * LOC_DMA_APP_GEMV_COLUMNS + \
+    (((4UL * ((LOC_DMA_APP_PIMBENCH_HOST ? 1UL : 2UL) * LOC_DMA_APP_ELEMENTS * LOC_DMA_APP_GEMV_COLUMNS + \
         (LOC_DMA_APP_ROUNDS + 2UL) * LOC_DMA_APP_ELEMENTS + \
         LOC_DMA_APP_ROUNDS * LOC_DMA_APP_GEMV_COLUMNS) + 65536UL) + \
         4095UL) / 4096UL * 4096UL)
@@ -237,7 +289,35 @@
 #define LOC_DMA_APP_UTM 0x10000000UL
 #define LOC_DMA_APP_PASS (0x4c444100UL + LOC_DMA_APP_KIND)
 
-#if LOC_DMA_APP_KIND >= 9 && LOC_DMA_APP_KIND <= 12
+#if LOC_DMA_APP_KIND == 13
+#define LOC_DMA_APP_NAME "linear-regression"
+#define LOC_DMA_APP_ARITHMETIC "bounded_int32_linear_regression_int64_sums_fp64_fit"
+#define LOC_DMA_APP_OBJECTS (3UL * LOC_DMA_APP_LIFECYCLES)
+#define LOC_DMA_APP_UPLOADS (2UL * LOC_DMA_APP_ROUNDS)
+#define LOC_DMA_APP_DOWNLOADS (4UL * LOC_DMA_APP_ROUNDS)
+#define LOC_DMA_APP_COMMANDS (6UL * LOC_DMA_APP_ROUNDS)
+#define LOC_DMA_APP_UPLOAD_BYTES (LOC_DMA_APP_UPLOADS * LOC_DMA_APP_VECTOR_BYTES)
+#define LOC_DMA_APP_DOWNLOAD_BYTES (32UL * LOC_DMA_APP_ROUNDS)
+#define LOC_DMA_APP_COMPUTE_PHASES (4UL * LOC_DMA_APP_ROUNDS)
+#define LOC_DMA_APP_HOST_FINISH_PHASES LOC_DMA_APP_ROUNDS
+#if 1184LL * LOC_DMA_APP_ELEMENTS * LOC_DMA_APP_ELEMENTS > 9223372036854775807LL
+#error "Regression integer numerator bound exceeds INT64"
+#endif
+#elif LOC_DMA_APP_KIND == 14
+#define LOC_DMA_APP_NAME "prefix-sum"
+#define LOC_DMA_APP_ARITHMETIC "bounded_int32_inclusive_prefix_sum"
+#define LOC_DMA_APP_OBJECTS (2UL * LOC_DMA_APP_LIFECYCLES)
+#define LOC_DMA_APP_UPLOADS LOC_DMA_APP_ROUNDS
+#define LOC_DMA_APP_DOWNLOADS LOC_DMA_APP_ROUNDS
+#define LOC_DMA_APP_COMMANDS LOC_DMA_APP_ROUNDS
+#define LOC_DMA_APP_UPLOAD_BYTES (LOC_DMA_APP_UPLOADS * LOC_DMA_APP_VECTOR_BYTES)
+#define LOC_DMA_APP_DOWNLOAD_BYTES LOC_DMA_APP_UPLOAD_BYTES
+#define LOC_DMA_APP_COMPUTE_PHASES LOC_DMA_APP_ROUNDS
+#define LOC_DMA_APP_HOST_FINISH_PHASES 0UL
+#if 8LL * LOC_DMA_APP_ELEMENTS > 2147483647LL
+#error "Prefix fixture cumulative bound exceeds INT32"
+#endif
+#elif LOC_DMA_APP_KIND >= 9 && LOC_DMA_APP_KIND <= 12
 #if LOC_DMA_APP_KIND == 11
 #define LOC_DMA_APP_NAME "relu"
 #define LOC_DMA_APP_ARITHMETIC "signed_int32_relu"
@@ -310,6 +390,20 @@
 #define LOC_DMA_APP_HOST_FINISH_PHASES 0UL
 #elif LOC_DMA_APP_KIND == 4
 #define LOC_DMA_APP_NAME "kmeans"
+#if LOC_DMA_APP_PIMBENCH_HOST
+#if !LOC_DMA_APP_COMPLETE_LIFECYCLES
+#error "Aligned k-means requires complete lifecycles"
+#endif
+#define LOC_DMA_APP_ARITHMETIC "bounded_int32_manhattan_equal_min_membership_integer_centroids"
+#define LOC_DMA_APP_OBJECTS (7UL * LOC_DMA_APP_LIFECYCLES)
+#define LOC_DMA_APP_UPLOADS (2UL * LOC_DMA_APP_LIFECYCLES + 4UL * LOC_DMA_APP_KMEANS_TOTAL_ITERATIONS)
+#define LOC_DMA_APP_DOWNLOADS (12UL * LOC_DMA_APP_KMEANS_TOTAL_ITERATIONS)
+#define LOC_DMA_APP_COMMANDS (35UL * LOC_DMA_APP_KMEANS_TOTAL_ITERATIONS)
+#define LOC_DMA_APP_UPLOAD_BYTES (LOC_DMA_APP_UPLOADS * LOC_DMA_APP_VECTOR_BYTES)
+#define LOC_DMA_APP_DOWNLOAD_BYTES ((3UL * LOC_DMA_APP_VECTOR_BYTES + 72UL) * LOC_DMA_APP_KMEANS_TOTAL_ITERATIONS)
+#define LOC_DMA_APP_COMPUTE_PHASES (14UL * LOC_DMA_APP_KMEANS_TOTAL_ITERATIONS)
+#define LOC_DMA_APP_HOST_FINISH_PHASES LOC_DMA_APP_KMEANS_TOTAL_ITERATIONS
+#else
 #define LOC_DMA_APP_ARITHMETIC "bounded_int32_squared_l2_integer_centroids_truncate_toward_zero"
 #define LOC_DMA_APP_OBJECTS (4UL * LOC_DMA_APP_LIFECYCLES)
 #define LOC_DMA_APP_UPLOADS (2UL * LOC_DMA_APP_LIFECYCLES)
@@ -322,6 +416,7 @@
 #define LOC_DMA_APP_COMPUTE_PHASES LOC_DMA_APP_DOWNLOADS
 #define LOC_DMA_APP_HOST_FINISH_PHASES \
     ((LOC_DMA_APP_CLUSTERS + 1UL) * LOC_DMA_APP_KMEANS_TOTAL_ITERATIONS)
+#endif
 #elif LOC_DMA_APP_KIND == 5
 #define LOC_DMA_APP_NAME "downsampling"
 #define LOC_DMA_APP_ARITHMETIC "uint8_2x2_shift_each_then_sum_stride2"

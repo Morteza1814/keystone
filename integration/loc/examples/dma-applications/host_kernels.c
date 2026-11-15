@@ -7,6 +7,100 @@
 #define HOST_KERNEL __attribute__((noinline, aligned(64)))
 
 HOST_KERNEL void
+loc_host_brightness_widen(const uint8_t *pixels, int16_t *input, size_t count)
+{
+    for (size_t i = 0; i < count; ++i) input[i] = pixels[i];
+}
+
+HOST_KERNEL void
+loc_host_tensor_copy(const int32_t *input, int32_t *output, size_t count)
+{
+    /* One contiguous channel: the PIMbench 1x1 decomposition/reconstruction
+     * preserves raster order. No permutation or arithmetic is required. */
+    for (size_t i = 0; i < count; ++i) output[i] = input[i];
+}
+
+static int
+knn_greater(unsigned long a, unsigned long b, const int32_t *distances)
+{
+    return distances[a] > distances[b] ||
+        (distances[a] == distances[b] && a > b);
+}
+
+static void
+knn_sift(unsigned long *heap, unsigned size, const int32_t *distances)
+{
+    unsigned parent = 0;
+    while (2 * parent + 1 < size) {
+        unsigned child = 2 * parent + 1;
+        if (child + 1 < size && knn_greater(heap[child + 1], heap[child], distances))
+            ++child;
+        if (!knn_greater(heap[child], heap[parent], distances)) break;
+        unsigned long tmp = heap[parent];
+        heap[parent] = heap[child]; heap[child] = tmp;
+        parent = child;
+    }
+}
+
+HOST_KERNEL uint32_t
+loc_host_knn_heap_vote(const uint32_t *labels, const int32_t *distances,
+    unsigned long *neighbors, size_t count)
+{
+    /* PIMbench's max-heap of (distance,index), including its strict-distance
+     * replacement rule and nearest-neighbor tie break for the majority vote.
+     * Fixed k=5 needs no general-purpose STL allocation inside the enclave. */
+    unsigned long heap[5];
+    unsigned size = 0;
+    for (unsigned long i = 0; i < count; ++i) {
+        if (size < 5) {
+            unsigned at = size++;
+            heap[at] = i;
+            while (at && knn_greater(heap[at], heap[(at - 1) / 2], distances)) {
+                unsigned parent = (at - 1) / 2;
+                unsigned long tmp = heap[at];
+                heap[at] = heap[parent]; heap[parent] = tmp;
+                at = parent;
+            }
+        } else if (distances[i] < distances[heap[0]]) {
+            heap[0] = i;
+            knn_sift(heap, size, distances);
+        }
+    }
+    while (size) {
+        neighbors[size - 1] = heap[0];
+        heap[0] = heap[--size];
+        knn_sift(heap, size, distances);
+    }
+    unsigned votes[3] = {0, 0, 0};
+    for (unsigned k = 0; k < 5; ++k) ++votes[labels[neighbors[k]]];
+    uint32_t winner = labels[neighbors[0]];
+    for (unsigned k = 1; k < 5; ++k) {
+        uint32_t candidate = labels[neighbors[k]];
+        if (votes[candidate] > votes[winner]) winner = candidate;
+    }
+    return winner;
+}
+
+HOST_KERNEL void
+loc_host_filter_aggregate_unrolled(const uint64_t *keys,
+    const unsigned char *mask, size_t count, uint64_t *matches, uint64_t *sum)
+{
+    uint64_t counts[8] = {0}, sums[8] = {0};
+    size_t i = 0;
+    for (; count - i >= 8; i += 8) {
+        unsigned bits = mask[i / 8];
+        for (unsigned lane = 0; lane < 8; ++lane) {
+            if ((bits >> lane) & 1U) { ++counts[lane]; sums[lane] += keys[i + lane]; }
+        }
+    }
+    for (; i < count; ++i) {
+        if ((mask[i / 8] >> (i % 8)) & 1U) { ++counts[0]; sums[0] += keys[i]; }
+    }
+    *matches = *sum = 0;
+    for (unsigned lane = 0; lane < 8; ++lane) { *matches += counts[lane]; *sum += sums[lane]; }
+}
+
+HOST_KERNEL void
 loc_host_pack_points(const struct point *points, int32_t *x, int32_t *y,
     size_t count)
 {
@@ -259,4 +353,44 @@ loc_host_gemv_pack_columns(const int32_t *matrix, int32_t *columns,
             for (size_t row = rb; row < end; ++row)
                 columns[col * rows + row] = matrix[row * column_count + first + col];
     }
+}
+
+HOST_KERNEL void
+loc_host_kmeans_divide(const int64_t scalars[9], int32_t centroids[3][2], int32_t *history)
+{
+    for (unsigned c = 0; c < 3; ++c) {
+        if (scalars[3 * c]) {
+            centroids[c][0] = scalars[3 * c + 1] / scalars[3 * c];
+            centroids[c][1] = scalars[3 * c + 2] / scalars[3 * c];
+        }
+        history[2 * c] = centroids[c][0];
+        history[2 * c + 1] = centroids[c][1];
+    }
+}
+
+/* Only integer-register arithmetic enters the enclave host path. */
+#include "regression_softfloat.h"
+
+HOST_KERNEL int
+loc_host_linear_regression(const int64_t sums[4], size_t count,
+    uint64_t coefficients[2])
+{
+    if (count < 2 || count > 1048576)
+        return 0;
+    const int64_t n = (int64_t)count;
+    const int64_t sx = sums[0], sxx = sums[1], sy = sums[2], sxy = sums[3];
+    if (sx < -16*n || sx > 16*n || sxx < 0 || sxx > 256*n ||
+        sy < -37*n || sy > 37*n || sxy < -592*n || sxy > 592*n)
+        return 0;
+    /* |numerator| <= 1184*N*N; denominator <= 256*N*N.
+     * N <= 2^20 makes every integer intermediate fit signed INT64. */
+    const int64_t denominator = n*sxx - sx*sx;
+    if (denominator <= 0)
+        return 0;
+    const float64_t slope = f64_div(i64_to_f64(n*sxy - sx*sy),
+                                      i64_to_f64(denominator));
+    coefficients[0] = slope.v;
+    coefficients[1] = f64_div(f64_sub(i64_to_f64(sy),
+        f64_mul(slope, i64_to_f64(sx))), i64_to_f64(n)).v;
+    return 1;
 }
