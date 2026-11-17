@@ -11,6 +11,7 @@ static uintptr_t arena;
 static uint32_t *buffer;
 static uint64_t tenant;
 static struct pressure_reply reply;
+static uint64_t churn[PRESSURE_CHURN], churn_count;
 static void need(int ok, unsigned long code) { if (!ok) { EAPP_RETURN(code); } }
 static void denied(int ok) { need(ok,0xfc40); ++reply.checks; }
 static void initialize(uint64_t id) {
@@ -92,15 +93,40 @@ void EAPP_ENTRY eapp_entry(void) {
                 denied(loc_pim_check_buffer(reply.objects[0],buffer,PRESSURE_BYTES+1,LOC_PIM_TO_HOST)!=0);
             }
             mp_end(MP_NEGATIVE);
+        } else if(c.action==MP_CHURN) {
+            need(tenant && !churn_count && c.count && c.count<=PRESSURE_CHURN,0xfc20);
+            mp_begin(MP_CONDITION);
+            for(unsigned i=0;i<c.count;++i) {
+                churn[i]=loc_pim_alloc(PRESSURE_BYTES); need(churn[i],0xfc21);
+                need(!loc_pim_grant(churn[i],OWNER_RIGHTS),0xfc22);
+            }
+            churn_count=c.count; mp_end(MP_CONDITION);
+        } else if(c.action==MP_CHURN_FREE) {
+            need(tenant && churn_count==c.count && churn_count,0xfc23);
+            mp_begin(MP_CLEANUP);
+            for(unsigned i=0;i<churn_count;++i) need(!loc_pim_free(churn[i]),0xfc24);
+            churn_count=0; mp_end(MP_CLEANUP);
+        } else if(c.action==MP_AUDIT) {
+            need(c.count && c.count<=PRESSURE_MAX_OBJECTS &&
+                (reply.count==c.count || (!tenant && !reply.count && !c.variant)),0xfc25);
+            unsigned phase=c.variant?MP_CHECK:MP_NEGATIVE;
+            mp_begin(phase);
+            for(unsigned i=0;i<c.count;++i) {
+                uint64_t status=loc_pim_check_buffer(reply.objects[i],buffer,PRESSURE_BYTES,LOC_PIM_TO_HOST);
+                if(c.variant) { need(!status,0xfc26); ++reply.calls; }
+                else denied(status!=0);
+            }
+            mp_end(phase);
         } else if(c.action==MP_FREE) {
-            need(!tenant && reply.count,0xfc10); mp_begin(MP_PIM_FREE);
+            unsigned phase=c.variant?MP_CLEANUP:MP_PIM_FREE;
+            need(!tenant && reply.count,0xfc10); mp_begin(phase);
             for(unsigned i=0;i<reply.count;++i) need(!loc_pim_free(reply.objects[i]),0xfc11);
-            reply.count=0; mp_end(MP_PIM_FREE);
+            reply.count=0; mp_end(phase);
         } else if(c.action==MP_HOST_FREE) {
             mp_begin(MP_RELEASE_HOST); need(!SYSCALL_2(__NR_munmap,arena,4096),0xfc12);
             arena=0; reply.count=0; mp_end(MP_RELEASE_HOST);
         } else if(c.action==MP_STOP) {
-            need(!arena && !reply.count,0xfc13); mp_begin(MP_EXIT); EAPP_RETURN(PRESSURE_PASS);
+            need(!arena && !reply.count && !churn_count,0xfc13); mp_begin(MP_EXIT); EAPP_RETURN(PRESSURE_PASS);
         } else need(0,0xfc14);
     }
 }

@@ -77,14 +77,39 @@ static pressure_reply step(unsigned i, uint64_t action, uint64_t count=0,
     changed.wait(lock,[&s]{return s.ready || s.done;});
     if(action==MP_STOP) { need(s.done,"stopped"); return s.reply; }
     need(s.ready && s.reply.action==action,"reply_action");
-    std::printf("METADATA_ACTION tenant=%u action=%lu count=%lu round=%lu principal=%lu calls=%lu checks=%lu\n",
-        i,action,count,round,s.reply.principal,s.reply.calls,s.reply.checks);
+    std::printf("METADATA_ACTION tenant=%u action=%lu count=%lu round=%lu principal=%lu calls=%lu checks=%lu variant=%lu\n",
+        i,action,count,round,s.reply.principal,s.reply.calls,s.reply.checks,variant);
     return s.reply;
 }
 static void destroy(unsigned i) {
     slots[i].worker.join(); mp_begin(MP_DESTROY);
     need(slots[i].enclave->destroy()==Keystone::Error::Success,"destroy"); mp_end(MP_DESTROY);
 }
+#if PRESSURE_REVOCATION
+static void revocation_trial(unsigned count,unsigned cold,unsigned selective,unsigned repeat) {
+    std::printf("REVOCATION_CASE objects=%u cold=%u selective=%u repeat=%u\n",count,cold,selective,repeat);
+    mp_begin(MP_WINDOW_BEGIN); mp_end(MP_WINDOW_BEGIN);
+    auto owner=step(0,MP_ALLOC,count); step(0,MP_OWNER_GRANT,count); step(0,MP_UPLOAD,count);
+    for(unsigned t=1;t<PRESSURE_TENANTS;++t) {
+        step(t,MP_ATTACH,count,0,owner.objects);
+        step(t,MP_AUDIT,count,0,nullptr,0,0); // No grant yet.
+        step(0,MP_GRANT,count,slots[t].reply.principal);
+        step(t,MP_VERIFY,count);
+    }
+    if(cold) for(unsigned t=1;t<PRESSURE_TENANTS;++t)
+        step(t,MP_CHURN,PRESSURE_CHURN/(PRESSURE_TENANTS-1));
+    if(selective) {
+        step(0,MP_REVOKE,count,slots[1].reply.principal);
+        for(unsigned t=0;t<PRESSURE_TENANTS;++t)
+            step(t,MP_AUDIT,count,0,nullptr,0,t!=1);
+        step(0,MP_FREE,count,0,nullptr,0,1); // Unmeasured cleanup; grants remain for peers.
+    } else step(0,MP_FREE,count);
+    for(unsigned t=0;t<PRESSURE_TENANTS;++t) step(t,MP_AUDIT,count,0,nullptr,0,0);
+    if(cold) for(unsigned t=1;t<PRESSURE_TENANTS;++t)
+        step(t,MP_CHURN_FREE,PRESSURE_CHURN/(PRESSURE_TENANTS-1));
+    mp_begin(MP_WINDOW_END); mp_end(MP_WINDOW_END);
+}
+#endif
 int main(int argc,char **argv) {
     need(argc==3,"arguments"); mp_end(MP_SETUP);
     for(unsigned t=0;t<PRESSURE_TENANTS;++t) start(t,argv[1],argv[2]);
@@ -93,6 +118,15 @@ int main(int argc,char **argv) {
         step(t,MP_INIT);
     }
     const unsigned counts[]={PRESSURE_CASES};
+#if PRESSURE_REVOCATION
+    for(unsigned count:counts)
+        for(unsigned cold=0;cold<2;++cold) {
+            if(!cold && count*PRESSURE_TENANTS>64) continue; // Genuine cache-only reference.
+            for(unsigned selective=0;selective<2;++selective)
+                for(unsigned repeat=0;repeat<PRESSURE_MEASURED;++repeat)
+                    revocation_trial(count,cold,selective,repeat);
+        }
+#else
     for(unsigned count:counts) {
         auto owner=step(0,MP_ALLOC,count); step(0,MP_OWNER_GRANT,count); step(0,MP_UPLOAD,count);
         for(unsigned t=1;t<PRESSURE_TENANTS;++t) {
@@ -108,8 +142,10 @@ int main(int argc,char **argv) {
         }
         step(0,MP_VERIFY,count); step(0,MP_FREE,count);
     }
+#endif
     for(unsigned t=0;t<PRESSURE_TENANTS;++t) { step(t,MP_HOST_FREE); step(t,MP_STOP); destroy(t); }
-    std::printf("METADATA_PRESSURE_PASS tenants=%u cases=%lu calls=%lu warmups=%u measured=%u bytes=%lu\n",
-        PRESSURE_TENANTS,sizeof(counts)/sizeof(counts[0]),PRESSURE_CALLS,PRESSURE_WARMUPS,PRESSURE_MEASURED,PRESSURE_BYTES);
+    std::printf("%s tenants=%u cases=%lu calls=%lu warmups=%u measured=%u bytes=%lu\n",
+        PRESSURE_REVOCATION?"REVOCATION_PRESSURE_PASS":"METADATA_PRESSURE_PASS",
+        PRESSURE_TENANTS,sizeof(counts)/sizeof(counts[0]),PRESSURE_CALLS,PRESSURE_REVOCATION?0:PRESSURE_WARMUPS,PRESSURE_MEASURED,PRESSURE_BYTES);
     std::fflush(nullptr); std::_Exit(0);
 }
